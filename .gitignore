@@ -1,5 +1,4 @@
-# Кэш собранных kiface
-cache/
+
 
 # Python virtual env
 .venv/
