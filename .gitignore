@@ -1,0 +1,31 @@
+# Кэш собранных kiface
+cache/
+
+# Python virtual env
+.venv/
+
+# Отладочные артефакты
+*.o
+*.so
+gdb_output*.txt
+
+# Большие бинарные SchLib (тестовый в test/)
+IC.SchLib
+Capacitors.SchLib
+Capacitors_test.kicad_sym
+test_bug_nullbyte.SchLib
+
+# Отладочные исходники (не нужны в репо)
+test_crash.cpp
+catch_abort.cpp
+create_minimal_test.py
+
+# VS Code
+.vscode/
+
+# Copilot instructions (локальные)
+.github/
+
+# Временные файлы сборки
+/tmp/
+*.tmp
