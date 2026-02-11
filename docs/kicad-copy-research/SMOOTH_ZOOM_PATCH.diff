@@ -1,0 +1,86 @@
+diff --git a/common/view/wx_view_controls.cpp b/common/view/wx_view_controls.cpp
+index 7313ad99..51685b87 100644
+--- a/common/view/wx_view_controls.cpp
++++ b/common/view/wx_view_controls.cpp
+@@ -320,22 +320,10 @@ void WX_VIEW_CONTROLS::onMotion( wxMouseEvent& aEvent )
+         else if( m_state == DRAG_ZOOMING )
+         {
+             static bool justWarped = false;
+-            int warpY = 0;
+-            wxSize parentSize = m_parentPanel->GetClientSize();
+-
+-            if( y < 0 )
+-            {
+-                warpY = parentSize.y;
+-            }
+-            else if( y >= parentSize.y )
+-            {
+-                warpY = -parentSize.y;
+-            }
+ 
+             if( !justWarped )
+             {
+                 VECTOR2D d = m_dragStartPoint - mousePos;
+-                m_dragStartPoint = mousePos;
+ 
+                 double scale = exp( d.y * m_settings.m_zoomSpeed * 0.001 );
+ 
+@@ -343,18 +331,13 @@ void WX_VIEW_CONTROLS::onMotion( wxMouseEvent& aEvent )
+ 
+                 m_view->SetScale( m_view->GetScale() * scale, m_view->ToWorld( m_zoomStartPoint ) );
+                 aEvent.StopPropagation();
+-            }
+ 
+-            if( warpY )
+-            {
+-                if( !justWarped )
+-                {
+-                    KIPLATFORM::UI::WarpPointer( m_parentPanel, x, y + warpY );
+-                    m_dragStartPoint += VECTOR2D( 0, warpY );
+-                    justWarped = true;
+-                }
+-                else
+-                    justWarped = false;
++                // Warp cursor back to the original zoom start point so it appears fixed
++                KIPLATFORM::UI::WarpPointer( m_parentPanel,
++                                              (int) m_zoomStartPoint.x,
++                                              (int) m_zoomStartPoint.y );
++                m_dragStartPoint = m_zoomStartPoint;
++                justWarped = true;
+             }
+             else
+             {
+@@ -512,6 +495,10 @@ void WX_VIEW_CONTROLS::onButton( wxMouseEvent& aEvent )
+             m_zoomStartPoint = m_dragStartPoint;
+             setState( DRAG_ZOOMING );
+ 
++            // Hide the cursor so it appears fixed during drag-zoom
++            m_parentPanel->SetCursor( wxCURSOR_BLANK );
++            KIPLATFORM::UI::InfiniteDragPrepareWindow( m_parentPanel );
++
+ #if defined USE_MOUSE_CAPTURE
+             if( !m_parentPanel->HasCapture() )
+                 m_parentPanel->CaptureMouse();
+@@ -524,6 +511,22 @@ void WX_VIEW_CONTROLS::onButton( wxMouseEvent& aEvent )
+         break;
+ 
+     case DRAG_ZOOMING:
++        if( aEvent.MiddleUp() || aEvent.LeftUp() || aEvent.RightUp() )
++        {
++            setState( IDLE );
++
++            // Restore the default cursor after drag-zoom
++            m_parentPanel->SetCursor( wxCURSOR_DEFAULT );
++            KIPLATFORM::UI::InfiniteDragReleaseWindow();
++
++#if defined USE_MOUSE_CAPTURE
++            if( !m_settings.m_cursorCaptured && m_parentPanel->HasCapture() )
++                m_parentPanel->ReleaseMouse();
++#endif
++        }
++
++        break;
++
+     case DRAG_PANNING:
+         if( aEvent.MiddleUp() || aEvent.LeftUp() || aEvent.RightUp() )
+         {
