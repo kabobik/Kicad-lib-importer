@@ -1,0 +1,64 @@
+--- a/kicad/kicad_manager_frame.h
++++ b/kicad/kicad_manager_frame.h
+@@ -36,6 +36,7 @@
+ class PROJECT_TREE;
+ class PROJECT_TREE_PANE;
+ class UPDATE_MANAGER;
++class LIBRARY_TREE_PANEL;
+ 
+ /**
+  * The main KiCad project manager frame.  It is not a KIWAY_PLAYER.
+@@ -240,6 +241,7 @@
+ 
+     PROJECT_TREE_PANE*    m_leftWin;
++    LIBRARY_TREE_PANEL*   m_libraryPanel;
+     wxAuiNotebook*        m_notebook;
+     PANEL_KICAD_LAUNCHER* m_launcher;
+     ACTION_TOOLBAR*       m_mainToolBar;
+
+
+--- a/kicad/kicad_manager_frame.cpp
++++ b/kicad/kicad_manager_frame.cpp
+@@ -42,6 +42,7 @@
+ #include <project_tree_pane.h>
++#include "library_tree_panel.h"
+ 
+@@ (constructor, after m_leftWin creation, around line 202)
+
+     // Left window: is the box which display tree project
+     m_leftWin = new PROJECT_TREE_PANE( this );
+ 
++    // Library panel: отдельная панель для библиотечного git-репозитория
++    m_libraryPanel = new LIBRARY_TREE_PANEL( this, this );
+
+@@ (after m_auimgr.AddPane for ProjectTree, around line 225)
+
+     m_auimgr.AddPane( m_leftWin, EDA_PANE().Palette().Name( "ProjectTree" ).Left().Layer( 1 )
+                       .Caption( PROJECT_FILES_CAPTION ).PaneBorder( false )
+                       .MinSize( m_leftWinWidth, -1 ).BestSize( m_leftWinWidth, -1 ) );
+ 
++    // Панель библиотеки — ниже дерева проекта в левой колонке
++    m_auimgr.AddPane( m_libraryPanel,
++                      EDA_PANE().Palette().Name( "LibraryTree" ).Left().Layer( 1 )
++                      .Caption( _( "Library" ) ).PaneBorder( false )
++                      .MinSize( m_leftWinWidth, 150 ).BestSize( m_leftWinWidth, 250 )
++                      .Position( 1 ) );  // Position(1) = под ProjectTree
+
+@@ (in OnProjectOpen or after project load, around line 1028)
+
++    // Загружаем путь к библиотеке из LocalSettings (или из CommonSettings)
++    wxString libPath = Prj().GetLocalSettings().m_LibraryGitPath;
++    if( !libPath.IsEmpty() )
++        m_libraryPanel->SetLibraryPath( libPath );
+
+@@ (in doCloseWindow, before m_auimgr.UnInit)
+
++    // Сохраняем путь библиотеки
++    if( m_libraryPanel && !m_libraryPanel->GetLibraryPath().IsEmpty() )
++        Prj().GetLocalSettings().m_LibraryGitPath = m_libraryPanel->GetLibraryPath();
+
+
+--- a/kicad/CMakeLists.txt
++++ b/kicad/CMakeLists.txt
+@@ (in set( KICAD_SRCS ... ))
++    library_tree_panel.cpp

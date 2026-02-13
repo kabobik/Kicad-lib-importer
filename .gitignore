@@ -28,3 +28,4 @@ create_minimal_test.py
 # Временные файлы сборки
 /tmp/
 *.tmp
+__pycache__/
