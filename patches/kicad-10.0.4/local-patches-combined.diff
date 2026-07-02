@@ -5,7 +5,7 @@ index 803f2f3..780e898 100644
 @@ -153,8 +153,11 @@ double OUTLINE_FONT::GetInterline( double aGlyphHeight, const METRICS& aFontMetr
  {
      double glyphToFontHeight = 1.0;
- 
+
 -    if( GetFace()->units_per_EM )
 -        glyphToFontHeight = GetFace()->height / GetFace()->units_per_EM;
 +    if( GetFace() && GetFace()->units_per_EM > 0 && GetFace()->height > 0 )
@@ -13,7 +13,7 @@ index 803f2f3..780e898 100644
 +        glyphToFontHeight = static_cast<double>( GetFace()->height )
 +                            / static_cast<double>( GetFace()->units_per_EM );
 +    }
- 
+
      return aFontMetrics.GetInterline( aGlyphHeight * glyphToFontHeight );
  }
 diff --git a/common/lib_tree_model.cpp b/common/lib_tree_model.cpp
@@ -22,8 +22,8 @@ index 938e5f9..a340c33 100644
 +++ b/common/lib_tree_model.cpp
 @@ -259,6 +259,37 @@ void LIB_TREE_NODE_ITEM::UpdateScore( const std::vector<std::unique_ptr<EDA_COMB
  }
- 
- 
+
+
 +LIB_TREE_NODE_GROUP::LIB_TREE_NODE_GROUP( LIB_TREE_NODE* aParent, const wxString& aGroupName )
 +{
 +    m_Type = TYPE::GROUP;
@@ -63,22 +63,22 @@ index ac8ebff..1af3ce5 100644
 --- a/common/lib_tree_model_adapter.cpp
 +++ b/common/lib_tree_model_adapter.cpp
 @@ -178,6 +178,8 @@ void LIB_TREE_MODEL_ADAPTER::loadColumnConfig()
- 
+
      m_shownColumns = m_cfg.columns;
- 
+
 +    m_groupByColumn = m_cfg.group_by_column;
 +
      if( m_shownColumns.empty() )
          m_shownColumns = {  _HKI( "Item" ), _HKI( "Description" ) };
- 
+
 @@ -232,6 +234,7 @@ void LIB_TREE_MODEL_ADAPTER::SaveSettings()
          }
- 
+
          m_cfg.open_libs = GetOpenLibs();
 +        m_cfg.group_by_column = m_groupByColumn;
      }
  }
- 
+
 @@ -384,6 +387,11 @@ void LIB_TREE_MODEL_ADAPTER::AttachTo( wxDataViewCtrl* aDataViewCtrl )
  {
      m_widget = aDataViewCtrl;
@@ -94,7 +94,7 @@ index ac8ebff..1af3ce5 100644
 @@ -561,10 +569,21 @@ wxDataViewItem LIB_TREE_MODEL_ADAPTER::FindItem( const LIB_ID& aLibId )
          if( aLibId.GetLibItemName() == "" )
              return ToItem( lib.get() );
- 
+
 -        for( std::unique_ptr<LIB_TREE_NODE>& alias: lib->m_Children )
 +        for( std::unique_ptr<LIB_TREE_NODE>& child: lib->m_Children )
          {
@@ -114,10 +114,10 @@ index ac8ebff..1af3ce5 100644
 +                    return ToItem( child.get() );
 +            }
          }
- 
+
          break;  // could not find the part in the requested library
 @@ -588,6 +607,7 @@ unsigned int LIB_TREE_MODEL_ADAPTER::GetChildren( const wxDataViewItem& aItem,
- 
+
      if( node->m_Type == LIB_TREE_NODE::TYPE::ROOT
              || node->m_Type == LIB_TREE_NODE::TYPE::LIBRARY
 +            || node->m_Type == LIB_TREE_NODE::TYPE::GROUP
@@ -126,7 +126,7 @@ index ac8ebff..1af3ce5 100644
          for( std::unique_ptr<LIB_TREE_NODE> const& child: node->m_Children )
 @@ -736,7 +756,12 @@ void LIB_TREE_MODEL_ADAPTER::GetValue( wxVariant& aVariant, const wxDataViewItem
          break;
- 
+
      default:
 -        if( m_colIdxMap.count( aCol ) )
 +        if( node->m_Type == LIB_TREE_NODE::TYPE::GROUP )
@@ -137,7 +137,7 @@ index ac8ebff..1af3ce5 100644
 +        else if( m_colIdxMap.count( aCol ) )
          {
              const wxString& key = m_colIdxMap.at( aCol );
- 
+
 @@ -775,6 +800,14 @@ bool LIB_TREE_MODEL_ADAPTER::GetAttr( const wxDataViewItem& aItem, unsigned int
              return true;
          }
@@ -150,13 +150,13 @@ index ac8ebff..1af3ce5 100644
 +            return true;
 +        }
 +    }
- 
+
      return false;
  }
 @@ -880,3 +913,143 @@ const LIB_TREE_NODE* LIB_TREE_MODEL_ADAPTER::showResults()
  }
- 
- 
+
+
 +void LIB_TREE_MODEL_ADAPTER::SetGroupColumn( const wxString& aColumn )
 +{
 +    if( m_groupByColumn == aColumn )
@@ -304,13 +304,13 @@ index 0f54aaf..065d9cb 100644
 @@ -169,6 +169,9 @@ APP_SETTINGS_BASE::APP_SETTINGS_BASE( const std::string& aFilename, int aSchemaV
      m_params.emplace_back(
              new PARAM_LIST<wxString>( "lib_tree.open_libs", &m_LibTree.open_libs, {} ) );
- 
+
 +    m_params.emplace_back( new PARAM<wxString>( "lib_tree.group_by_column",
 +            &m_LibTree.group_by_column, wxT( "" ) ) );
 +
      m_params.emplace_back( new PARAM<bool>( "printing.background",
              &m_Printing.background, false ) );
- 
+
 diff --git a/common/view/wx_view_controls.cpp b/common/view/wx_view_controls.cpp
 index ceea0e1..c7df21b 100644
 --- a/common/view/wx_view_controls.cpp
@@ -330,20 +330,20 @@ index ceea0e1..c7df21b 100644
 -            {
 -                warpY = -parentSize.y;
 -            }
- 
+
              if( !justWarped )
              {
                  VECTOR2D d = m_dragStartPoint - mousePos;
 -                m_dragStartPoint = mousePos;
- 
+
                  double scale = exp( d.y * m_settings.m_zoomSpeed * 0.001 );
- 
+
 @@ -386,18 +374,13 @@ void WX_VIEW_CONTROLS::onMotion( wxMouseEvent& aEvent )
- 
+
                  m_view->SetScale( m_view->GetScale() * scale, m_view->ToWorld( m_zoomStartPoint ) );
                  aEvent.StopPropagation();
 -            }
- 
+
 -            if( warpY )
 -            {
 -                if( !justWarped )
@@ -366,7 +366,7 @@ index ceea0e1..c7df21b 100644
 @@ -563,6 +546,10 @@ void WX_VIEW_CONTROLS::onButton( wxMouseEvent& aEvent )
              m_zoomStartPoint = m_dragStartPoint;
              setState( DRAG_ZOOMING );
- 
+
 +            // Hide the cursor so it appears fixed during drag-zoom
 +            m_parentPanel->SetCursor( wxCURSOR_BLANK );
 +            KIPLATFORM::UI::InfiniteDragPrepareWindow( m_parentPanel );
@@ -376,7 +376,7 @@ index ceea0e1..c7df21b 100644
                  m_parentPanel->CaptureMouse();
 @@ -575,6 +562,22 @@ void WX_VIEW_CONTROLS::onButton( wxMouseEvent& aEvent )
          break;
- 
+
      case DRAG_ZOOMING:
 +        if( aEvent.MiddleUp() || aEvent.LeftUp() || aEvent.RightUp() )
 +        {
@@ -404,35 +404,35 @@ index 82365a6..290f81b 100644
 @@ -715,7 +715,7 @@ void LIB_TREE::onQueryCharHook( wxKeyEvent& aKeyStroke )
      case WXK_ADD:
          updateRecentSearchMenu();
- 
+
 -        if( type == LIB_TREE_NODE::TYPE::LIBRARY )
 +        if( type == LIB_TREE_NODE::TYPE::LIBRARY || type == LIB_TREE_NODE::TYPE::GROUP )
              m_tree_ctrl->Expand( sel );
- 
+
          break;
 @@ -723,7 +723,7 @@ void LIB_TREE::onQueryCharHook( wxKeyEvent& aKeyStroke )
      case WXK_SUBTRACT:
          updateRecentSearchMenu();
- 
+
 -        if( type == LIB_TREE_NODE::TYPE::LIBRARY )
 +        if( type == LIB_TREE_NODE::TYPE::LIBRARY || type == LIB_TREE_NODE::TYPE::GROUP )
              m_tree_ctrl->Collapse( sel );
- 
+
          break;
 @@ -734,7 +734,8 @@ void LIB_TREE::onQueryCharHook( wxKeyEvent& aKeyStroke )
- 
+
          if( GetSelectedLibId().IsValid() )
              postSelectEvent();
 -        else if( type == LIB_TREE_NODE::TYPE::LIBRARY )
 +        else if( type == LIB_TREE_NODE::TYPE::LIBRARY
 +                 || type == LIB_TREE_NODE::TYPE::GROUP )
              toggleExpand( sel );
- 
+
          break;
 @@ -1053,7 +1054,41 @@ void LIB_TREE::onHeaderContextMenu( wxDataViewEvent& aEvent )
- 
+
      menu.Add( ACTIONS::selectLibTreeColumns );
- 
+
 -    if( GetPopupMenuSelectionFromUser( menu ) != wxID_NONE )
 +    // Determine the column that was right-clicked
 +    int colIdx = aEvent.GetColumn();
@@ -484,7 +484,7 @@ index 82365a6..290f81b 100644
 +    {
 +        m_adapter->SetGroupColumn( wxEmptyString );
 +    }
- 
+
      m_previewDisabled = false;
  }
 diff --git a/eeschema/sch_bus_entry.cpp b/eeschema/sch_bus_entry.cpp
@@ -492,7 +492,7 @@ index fc7d694..b3c3258 100644
 --- a/eeschema/sch_bus_entry.cpp
 +++ b/eeschema/sch_bus_entry.cpp
 @@ -657,5 +657,13 @@ static struct SCH_BUS_ENTRY_DESC
- 
+
          propMgr.AddProperty( new PROPERTY<SCH_BUS_ENTRY_BASE, COLOR4D>( _HKI( "Color" ),
                      &SCH_BUS_ENTRY_BASE::SetBusEntryColor, &SCH_BUS_ENTRY_BASE::GetBusEntryColor ) );
 +
@@ -512,7 +512,7 @@ index 6c22c18..df71e38 100644
 @@ -73,6 +73,11 @@ public:
      VECTOR2I GetSize() const { return m_size; }
      void SetSize( const VECTOR2I& aSize ) { m_size = aSize; }
- 
+
 +    int GetSizeX() const { return m_size.x; }
 +    void SetSizeX( int aX ) { m_size.x = aX; }
 +    int GetSizeY() const { return m_size.y; }
@@ -537,21 +537,21 @@ index f98031f..b2794ea 100644
 +    return node->m_Type == LIB_TREE_NODE::TYPE::LIBRARY
 +        || node->m_Type == LIB_TREE_NODE::TYPE::GROUP;
  }
- 
- 
+
+
 @@ -149,6 +154,10 @@ void SYMBOL_TREE_SYNCHRONIZING_ADAPTER::Sync( const wxString& aForceRefresh,
      }
- 
+
      m_tree.AssignIntrinsicRanks( m_shownColumns );
 +
 +    // Re-apply grouping if active (updateLibrary flattens groups before syncing).
 +    if( !GetGroupColumn().IsEmpty() )
 +        rebuildGroupNodes();
  }
- 
- 
+
+
 @@ -168,6 +177,30 @@ int SYMBOL_TREE_SYNCHRONIZING_ADAPTER::GetLibrariesCount() const
- 
+
  void SYMBOL_TREE_SYNCHRONIZING_ADAPTER::updateLibrary( LIB_TREE_NODE_LIBRARY& aLibNode )
  {
 +    // Flatten any GROUP nodes back to direct ITEM children before syncing.
@@ -579,7 +579,7 @@ index f98031f..b2794ea 100644
 +    }
 +
      auto hashIt = m_libHashes.find( aLibNode.m_Name );
- 
+
      if( hashIt == m_libHashes.end() )
 diff --git a/eeschema/tools/sch_line_wire_bus_tool.cpp b/eeschema/tools/sch_line_wire_bus_tool.cpp
 index 1289c94..68eba34 100644
@@ -587,8 +587,8 @@ index 1289c94..68eba34 100644
 +++ b/eeschema/tools/sch_line_wire_bus_tool.cpp
 @@ -1243,6 +1243,162 @@ void SCH_LINE_WIRE_BUS_TOOL::simplifyWireList()
  }
- 
- 
+
+
 +SCH_BUS_WIRE_ENTRY* SCH_LINE_WIRE_BUS_TOOL::tryConvertLastSegmentToBusEntry( SCH_SCREEN* aScreen )
 +{
 +    // Don't convert during bus unfold operations.
@@ -751,7 +751,7 @@ index 1289c94..68eba34 100644
 @@ -1255,6 +1411,9 @@ void SCH_LINE_WIRE_BUS_TOOL::finishSegments( SCH_COMMIT& aCommit )
      // Remove segments backtracking over others
      simplifyWireList();
- 
+
 +    // Try to auto-convert the last 45° wire segment into a bus entry
 +    SCH_BUS_WIRE_ENTRY* autoBusEntry = tryConvertLastSegmentToBusEntry( screen );
 +
@@ -761,7 +761,7 @@ index 1289c94..68eba34 100644
 @@ -1345,6 +1504,13 @@ void SCH_LINE_WIRE_BUS_TOOL::finishSegments( SCH_COMMIT& aCommit )
      if( m_busUnfold.in_progress )
          m_busUnfold = {};
- 
+
 +    if( autoBusEntry )
 +    {
 +        autoBusEntry->ClearFlags( IS_NEW );
@@ -779,7 +779,7 @@ index 4681ce7..8fbd823 100644
 @@ -185,6 +185,14 @@ private:
      void computeBreakPoint( const std::pair<SCH_LINE*, SCH_LINE*>& aSegments, VECTOR2I& aPosition,
                              LINE_MODE mode, bool posture );
- 
+
 +    /**
 +     * Try to convert the last 45° wire segment into a bus entry if it ends on a bus.
 +     *
@@ -790,7 +790,7 @@ index 4681ce7..8fbd823 100644
 +
  private:
      bool                    m_inDrawingTool;   // Reentrancy guard
- 
+
 diff --git a/include/lib_tree_model.h b/include/lib_tree_model.h
 index 2183a69..7fcd323 100644
 --- a/include/lib_tree_model.h
@@ -805,8 +805,8 @@ index 2183a69..7fcd323 100644
          INVALID
 @@ -233,6 +234,33 @@ protected:
  };
- 
- 
+
+
 +/**
 + * Node type: group (intermediate grouping node within a library).
 + */
@@ -844,7 +844,7 @@ index 21d3afa..34b7a46 100644
 @@ -201,6 +201,19 @@ public:
          m_lazyLoadHandler = aHandler;
      }
- 
+
 +    /**
 +     * Set/get the column used for grouping items within each library.
 +     * An empty string means no grouping (flat display).
@@ -862,9 +862,9 @@ index 21d3afa..34b7a46 100644
       * Sets which columns are shown in the widget.  Invalid column names are discarded.
       * @param aColumnNames is an ordered list of column names to show
 @@ -409,6 +422,16 @@ protected:
- 
+
      void resortTree();
- 
+
 +    /**
 +     * Rebuild the GROUP nodes inside each LIBRARY according to m_groupByColumn.
 +     */
@@ -885,10 +885,10 @@ index 21d3afa..34b7a46 100644
 +    wxString                     m_groupByColumn;  ///< Column name for grouping; empty = flat.
      wxDataViewCtrl*              m_widget;
      std::function<void()>        m_lazyLoadHandler;
- 
+
 @@ -449,4 +473,3 @@ private:
  };
- 
+
  #endif // LIB_TREE_MODEL_ADAPTER_H
 -
 diff --git a/include/settings/app_settings.h b/include/settings/app_settings.h
@@ -901,7 +901,7 @@ index 1fdbdd9..a8b638f 100644
          std::vector<wxString>   open_libs;     ///< list of libraries the user has open in the tree.
 +        wxString                group_by_column; ///< Column name used for grouping (empty = no grouping).
      };
- 
+
      struct PANEL_DESIGN_BLOCK_CHOOSER
 diff --git a/pcbnew/fp_tree_synchronizing_adapter.cpp b/pcbnew/fp_tree_synchronizing_adapter.cpp
 index 15bc07b..3232bca 100644
@@ -919,10 +919,10 @@ index 15bc07b..3232bca 100644
 +    return node->m_Type == LIB_TREE_NODE::TYPE::LIBRARY
 +        || node->m_Type == LIB_TREE_NODE::TYPE::GROUP;
  }
- 
- 
+
+
 @@ -134,6 +139,10 @@ void FP_TREE_SYNCHRONIZING_ADAPTER::Sync( FOOTPRINT_LIBRARY_ADAPTER* aLibs )
- 
+
      if( m_libMap.size() > count )
          m_tree.AssignIntrinsicRanks( m_shownColumns );
 +
@@ -930,10 +930,10 @@ index 15bc07b..3232bca 100644
 +    if( !GetGroupColumn().IsEmpty() )
 +        rebuildGroupNodes();
  }
- 
- 
+
+
 @@ -145,6 +154,30 @@ int FP_TREE_SYNCHRONIZING_ADAPTER::GetLibrariesCount() const
- 
+
  void FP_TREE_SYNCHRONIZING_ADAPTER::updateLibrary( LIB_TREE_NODE_LIBRARY& aLibNode )
  {
 +    // Flatten any GROUP nodes back to direct ITEM children before syncing.
@@ -968,16 +968,16 @@ diff --git a/eeschema/sch_io/database/sch_io_database.cpp b/eeschema/sch_io/data
 +++ b/eeschema/sch_io/database/sch_io_database.cpp
 @@ -601,6 +601,7 @@
          fieldsMap[field->GetName()] = field;
- 
+
      static const wxString c_valueFieldName( wxS( "Value" ) );
 +    static const wxString c_referenceFieldName( wxS( "Reference" ) );
      static const wxString c_datasheetFieldName( wxS( "Datasheet" ) );
      static const wxString c_footprintFieldName( wxS( "Footprint" ) );
- 
+
 @@ -630,6 +631,9 @@
- 
+
          wxString value( strValue.c_str(), wxConvUTF8 );
- 
+
 +        if( mapping.name_wx == c_referenceFieldName && value.IsEmpty() )
 +            continue;
 +
@@ -999,3 +999,463 @@ diff --git a/kicad/project_tree_pane.cpp b/kicad/project_tree_pane.cpp
      wxT( "^.*\\.pdf$" ),
      wxT( "^.*\\.sch$" ),           // Legacy Eeschema files
      wxT( "^.*\\.kicad_sch$" ),     // S-expr Eeschema files
+diff --git a/include/layer_ids.h b/include/layer_ids.h
+--- a/include/layer_ids.h
++++ b/include/layer_ids.h
+@@ -501,6 +501,7 @@
+     LAYER_OP_VOLTAGES,
+     LAYER_OP_CURRENTS,
+     LAYER_GROUP,
++    LAYER_SCHEMATIC_PAGE_BACKGROUND,
+
+     SCH_LAYER_ID_END
+ };
+diff --git a/common/layer_id.cpp b/common/layer_id.cpp
+--- a/common/layer_id.cpp
++++ b/common/layer_id.cpp
+@@ -116,6 +116,8 @@
+     case LAYER_SELECTION_SHADOWS:       return _( "Selection highlight" );
+     case LAYER_SCHEMATIC_DRAWINGSHEET:  return _( "Drawing sheet" );
+     case LAYER_SCHEMATIC_PAGE_LIMITS:   return _( "Page limits" );
++    case LAYER_SCHEMATIC_PAGE_BACKGROUND:
++                                        return _( "Page background" );
+     case LAYER_OP_VOLTAGES:             return _( "Operating point voltages" );
+     case LAYER_OP_CURRENTS:             return _( "Operating point currents" );
+
+diff --git a/common/settings/color_settings.cpp b/common/settings/color_settings.cpp
+--- a/common/settings/color_settings.cpp
++++ b/common/settings/color_settings.cpp
+@@ -97,6 +97,7 @@
+     CLR( "schematic.wire",              LAYER_WIRE                   );
+     CLR( "schematic.worksheet",         LAYER_SCHEMATIC_DRAWINGSHEET );
+     CLR( "schematic.page_limits",       LAYER_SCHEMATIC_PAGE_LIMITS  );
++    CLR( "schematic.page_background",   LAYER_SCHEMATIC_PAGE_BACKGROUND );
+     CLR( "schematic.op_voltages",       LAYER_OP_VOLTAGES            );
+     CLR( "schematic.op_currents",       LAYER_OP_CURRENTS            );
+
+diff --git a/common/settings/builtin_color_themes.h b/common/settings/builtin_color_themes.h
+--- a/common/settings/builtin_color_themes.h
++++ b/common/settings/builtin_color_themes.h
+@@ -77,6 +77,7 @@
+             { LAYER_WIRE,                   CSS_COLOR( 0,   150, 0,   1 ) },
+             { LAYER_SCHEMATIC_DRAWINGSHEET, CSS_COLOR( 132, 0,   0,   1 ) },
+             { LAYER_SCHEMATIC_PAGE_LIMITS,  CSS_COLOR( 181, 181, 181, 1 ) },
++            { LAYER_SCHEMATIC_PAGE_BACKGROUND, CSS_COLOR( 255, 255, 255, 1 ) },
+             { LAYER_OP_VOLTAGES,            CSS_COLOR( 132, 0,   50,  1 ) },
+             { LAYER_OP_CURRENTS,            CSS_COLOR( 224, 0,   12,  1 ) },
+
+@@ -358,6 +359,7 @@
+             { LAYER_VALUEPART,              COLOR4D( CYAN ) },
+             { LAYER_WIRE,                   COLOR4D( GREEN ) },
+             { LAYER_SCHEMATIC_DRAWINGSHEET, COLOR4D( RED ) },
++            { LAYER_SCHEMATIC_PAGE_BACKGROUND, COLOR4D( WHITE ) },
+             { LAYER_OP_VOLTAGES,            COLOR4D( DARKMAGENTA ) },
+             { LAYER_OP_CURRENTS,            COLOR4D( RED ) },
+
+diff --git a/include/render_settings.h b/include/render_settings.h
+--- a/include/render_settings.h
++++ b/include/render_settings.h
+@@ -244,6 +244,11 @@
+     virtual const COLOR4D& GetBackgroundColor() const = 0;
+
+     /**
++     * Return the color used to clear the GAL before drawing.
++     */
++    virtual const COLOR4D& GetClearColor() const { return GetBackgroundColor(); }
++
++    /**
+      * Set the background color.
+      */
+     virtual void SetBackgroundColor( const COLOR4D& aColor ) = 0;
+@@ -259,6 +264,11 @@
+     virtual const COLOR4D& GetCursorColor() = 0;
+
+     /**
++     * Return true when the GAL grid should be drawn before the view layers.
++     */
++    virtual bool DrawGridBeforeView() const { return true; }
++
++    /**
+      * Return the color used to draw a layer.
+      *
+      * @param aLayer is the layer number.
+diff --git a/common/draw_panel_gal.cpp b/common/draw_panel_gal.cpp
+--- a/common/draw_panel_gal.cpp
++++ b/common/draw_panel_gal.cpp
+@@ -361,7 +361,7 @@
+                 m_view->MarkDirty();
+             }
+
+-            m_gal->SetClearColor( settings->GetBackgroundColor() );
++            m_gal->SetClearColor( settings->GetClearColor() );
+             m_gal->SetGridColor( settings->GetGridColor() );
+             m_gal->SetCursorColor( settings->GetCursorColor() );
+
+@@ -382,7 +382,8 @@
+                 m_view->ClearTargets();
+
+                 // Grid has to be redrawn only when the NONCACHED target is redrawn
+-                if( m_view->IsTargetDirty( KIGFX::TARGET_NONCACHED ) )
++                if( settings->DrawGridBeforeView()
++                        && m_view->IsTargetDirty( KIGFX::TARGET_NONCACHED ) )
+                     m_gal->DrawGrid();
+
+                 cntRedraw.Start();
+diff --git a/include/drawing_sheet/ds_painter.h b/include/drawing_sheet/ds_painter.h
+--- a/include/drawing_sheet/ds_painter.h
++++ b/include/drawing_sheet/ds_painter.h
+@@ -67,6 +67,7 @@
+     void SetSelectedColor( const COLOR4D& aColor ) { m_selectedColor = aColor; }
+     void SetBrightenedColor( const COLOR4D& aColor ) { m_brightenedColor = aColor; }
+     void SetPageBorderColor( const COLOR4D& aColor ) { m_pageBorderColor = aColor; }
++    void SetPageBackgroundColor( const COLOR4D& aColor ) { m_pageBackgroundColor = aColor; }
+
+     const COLOR4D& GetGridColor() override
+     {
+@@ -87,6 +88,7 @@
+
+     COLOR4D m_gridColor;
+     COLOR4D m_cursorColor;
++    COLOR4D m_pageBackgroundColor;
+     COLOR4D m_pageBorderColor;
+ };
+
+@@ -104,6 +106,8 @@
+     /// @copydoc PAINTER::Draw()
+     virtual bool Draw( const VIEW_ITEM*, int ) override;
+
++    void DrawPageBackground( const PAGE_INFO* aPageInfo, int aScaleFactor,
++                             const BOX2I& aViewport ) const;
+     void DrawBorder( const PAGE_INFO* aPageInfo, int aScaleFactor ) const;
+
+     /// @copydoc PAINTER::GetSettings()
+diff --git a/common/drawing_sheet/ds_painter.cpp b/common/drawing_sheet/ds_painter.cpp
+--- a/common/drawing_sheet/ds_painter.cpp
++++ b/common/drawing_sheet/ds_painter.cpp
+@@ -37,6 +37,8 @@
+ #include <drawing_sheet/ds_painter.h>
+ #include <drawing_sheet/ds_data_item.h>
+
++#include <algorithm>
++
+ #include <wx/app.h>
+
+ using namespace KIGFX;
+@@ -49,6 +51,7 @@
+     m_normalColor =     RED;
+     m_selectedColor =   m_normalColor.Brightened( 0.5 );
+     m_brightenedColor = COLOR4D( 0.0, 1.0, 0.0, 0.9 );
++    m_pageBackgroundColor = COLOR4D::UNSPECIFIED;
+     m_pageBorderColor = COLOR4D( 0.4, 0.4, 0.4, 1.0 );
+
+     update();
+@@ -362,9 +365,9 @@
+
+     m_gal->SetIsStroke( true );
+
+-    // Use a gray color for the border color
++    m_gal->SetFillColor( m_renderSettings.m_pageBackgroundColor );
+     m_gal->SetStrokeColor( m_renderSettings.m_pageBorderColor );
+-    m_gal->SetIsFill( false );
++    m_gal->SetIsFill( m_renderSettings.m_pageBackgroundColor.a > 0.0 );
+     m_gal->SetLineWidth(  m_renderSettings.GetDefaultPenWidth() );
+
+     m_gal->DrawRectangle( origin, end );
+@@ -384,6 +387,49 @@
+ }
+
+
++void KIGFX::DS_PAINTER::DrawPageBackground( const PAGE_INFO* aPageInfo, int aScaleFactor,
++                                            const BOX2I& aViewport ) const
++{
++    m_gal->SetIsStroke( false );
++    m_gal->SetIsFill( true );
++
++    auto drawRect =
++            [&]( double aLeft, double aTop, double aRight, double aBottom, const COLOR4D& aColor )
++            {
++                if( aColor.a <= 0.0 || aRight <= aLeft || aBottom <= aTop )
++                    return;
++
++                m_gal->SetFillColor( aColor );
++                m_gal->DrawRectangle( VECTOR2D( aLeft, aTop ), VECTOR2D( aRight, aBottom ) );
++            };
++
++    const double pageLeft = 0.0;
++    const double pageTop = 0.0;
++    const double pageRight = aPageInfo->GetWidthMils() * aScaleFactor;
++    const double pageBottom = aPageInfo->GetHeightMils() * aScaleFactor;
++
++    const double viewLeft = std::min( aViewport.GetLeft(), aViewport.GetRight() );
++    const double viewRight = std::max( aViewport.GetLeft(), aViewport.GetRight() );
++    const double viewTop = std::min( aViewport.GetTop(), aViewport.GetBottom() );
++    const double viewBottom = std::max( aViewport.GetTop(), aViewport.GetBottom() );
++
++    drawRect( viewLeft, viewTop, viewRight, std::min( viewBottom, pageTop ),
++              m_renderSettings.m_backgroundColor );
++    drawRect( viewLeft, std::max( viewTop, pageBottom ), viewRight, viewBottom,
++              m_renderSettings.m_backgroundColor );
++
++    const double sideTop = std::max( viewTop, pageTop );
++    const double sideBottom = std::min( viewBottom, pageBottom );
++
++    drawRect( viewLeft, sideTop, std::min( viewRight, pageLeft ), sideBottom,
++              m_renderSettings.m_backgroundColor );
++    drawRect( std::max( viewLeft, pageRight ), sideTop, viewRight, sideBottom,
++              m_renderSettings.m_backgroundColor );
++
++    drawRect( pageLeft, pageTop, pageRight, pageBottom, m_renderSettings.m_pageBackgroundColor );
++}
++
++
+ void KIGFX::DS_PAINTER::DrawBorder( const PAGE_INFO* aPageInfo, int aScaleFactor ) const
+ {
+     VECTOR2D origin = VECTOR2D( 0.0, 0.0 );
+diff --git a/include/drawing_sheet/ds_proxy_view_item.h b/include/drawing_sheet/ds_proxy_view_item.h
+--- a/include/drawing_sheet/ds_proxy_view_item.h
++++ b/include/drawing_sheet/ds_proxy_view_item.h
+@@ -104,6 +104,13 @@
+      */
+     void SetPageBorderColorLayer( int aLayerId ) { m_pageBorderColorLayer = aLayerId; }
+
++    /**
++     * Override the layer used to pick the color of the page background.
++     *
++     * @param aLayerId is the layer to use, or UNDEFINED_LAYER for no fill.
++     */
++    void SetPageBackgroundColorLayer( int aLayerId ) { m_pageBackgroundColorLayer = aLayerId; }
++
+     const PAGE_INFO& GetPageInfo() { return *m_pageInfo; }
+     const TITLE_BLOCK& GetTitleBlock() { return *m_titleBlock; }
+
+@@ -162,6 +169,9 @@
+
+     /// Layer that is used for page border color
+     int                 m_pageBorderColorLayer;
++
++    /// Layer that is used for page background color
++    int                 m_pageBackgroundColorLayer;
+ };
+
+ #endif /* DS_PROXY_VIEW_ITEM_H */
+diff --git a/common/drawing_sheet/ds_proxy_view_item.cpp b/common/drawing_sheet/ds_proxy_view_item.cpp
+--- a/common/drawing_sheet/ds_proxy_view_item.cpp
++++ b/common/drawing_sheet/ds_proxy_view_item.cpp
+@@ -48,7 +48,8 @@
+         m_project( aProject ),
+         m_properties( aProperties ),
+         m_colorLayer( LAYER_DRAWINGSHEET ),
+-        m_pageBorderColorLayer( LAYER_PAGE_LIMITS )
++        m_pageBorderColorLayer( LAYER_PAGE_LIMITS ),
++        m_pageBackgroundColorLayer( UNDEFINED_LAYER )
+ {
+ }
+
+@@ -129,12 +130,33 @@
+     DS_PAINTER ws_painter( gal );
+     auto       ws_settings = static_cast<DS_RENDER_SETTINGS*>( ws_painter.GetSettings() );
+
++    ws_settings->SetBackgroundColor( settings->GetBackgroundColor() );
+     ws_settings->SetNormalColor( settings->GetLayerColor( m_colorLayer ) );
+     ws_settings->SetSelectedColor( settings->GetLayerColor( LAYER_SELECT_OVERLAY ) );
+     ws_settings->SetBrightenedColor( settings->GetLayerColor( LAYER_BRIGHTENED ) );
+     ws_settings->SetPageBorderColor( settings->GetLayerColor( m_pageBorderColorLayer ) );
++
++    if( m_pageBackgroundColorLayer != UNDEFINED_LAYER )
++    {
++        COLOR4D pageBackgroundColor = settings->GetLayerColor( m_pageBackgroundColorLayer );
++        ws_settings->SetPageBackgroundColor( pageBackgroundColor );
++    }
++
+     ws_settings->SetDefaultFont( settings->GetDefaultFont() );
+
++    if( aLayer == m_pageBackgroundColorLayer )
++    {
++        ws_painter.DrawPageBackground( m_pageInfo, m_iuScale.IU_PER_MILS, viewport );
++
++        if( !settings->IsPrinting() )
++            gal->DrawGrid();
++
++        if( flipped )
++            gal->Restore();
++
++        return;
++    }
++
+     // Draw all the components that make the drawing sheet
+     for( DS_DRAW_ITEM_BASE* item = drawList.GetFirst(); item; item = drawList.GetNext() )
+     {
+@@ -154,6 +176,10 @@
+ std::vector<int> DS_PROXY_VIEW_ITEM::ViewGetLayers() const
+ {
+     std::vector<int> layer{ LAYER_DRAWINGSHEET };
++
++    if( m_pageBackgroundColorLayer != UNDEFINED_LAYER )
++        layer.push_back( m_pageBackgroundColorLayer );
++
+     return layer;
+ }
+
+diff --git a/eeschema/sch_render_settings.h b/eeschema/sch_render_settings.h
+--- a/eeschema/sch_render_settings.h
++++ b/eeschema/sch_render_settings.h
+@@ -57,6 +57,11 @@
+         return it == m_layerColors.end() ? COLOR4D::BLACK : it->second;
+     }
+
++    const KIGFX::COLOR4D& GetClearColor() const override
++    {
++        return m_IsSymbolEditor ? GetBackgroundColor() : COLOR4D::CLEAR;
++    }
++
+     void SetBackgroundColor( const COLOR4D& aColor ) override
+     {
+         m_layerColors[ LAYER_SCHEMATIC_BACKGROUND ] = aColor;
+@@ -69,6 +74,7 @@
+
+     const COLOR4D& GetGridColor() override { return m_layerColors[ LAYER_SCHEMATIC_GRID ]; }
+     const COLOR4D& GetCursorColor() override { return m_layerColors[ LAYER_SCHEMATIC_CURSOR ]; }
++    bool DrawGridBeforeView() const override { return m_IsSymbolEditor; }
+
+     bool GetShowPageLimits() const override;
+
+diff --git a/eeschema/sch_view.h b/eeschema/sch_view.h
+--- a/eeschema/sch_view.h
++++ b/eeschema/sch_view.h
+@@ -80,7 +80,8 @@
+                                        LAYER_DEVICE_BACKGROUND,
+                                        LAYER_SHEET_BACKGROUND,
+                                        LAYER_NOTES_BACKGROUND,
+-                                       LAYER_DRAWINGSHEET };
++                                       LAYER_DRAWINGSHEET,
++                                       LAYER_SCHEMATIC_PAGE_BACKGROUND };
+
+
+ namespace KIGFX
+diff --git a/eeschema/sch_draw_panel.cpp b/eeschema/sch_draw_panel.cpp
+--- a/eeschema/sch_draw_panel.cpp
++++ b/eeschema/sch_draw_panel.cpp
+@@ -80,7 +80,7 @@
+     // Early initialization of the canvas background color,
+     // before any OnPaint event is fired for the canvas using a wrong bg color
+     auto settings = m_painter->GetSettings();
+-    m_gal->SetClearColor( settings->GetBackgroundColor() );
++    m_gal->SetClearColor( settings->GetClearColor() );
+
+     setDefaultLayerOrder();
+     setDefaultLayerDeps();
+@@ -169,6 +169,9 @@
+     m_view->SetLayerTarget( LAYER_DRAWINGSHEET, KIGFX::TARGET_NONCACHED );
+     m_view->SetLayerDisplayOnly( LAYER_DRAWINGSHEET ) ;
+
++    m_view->SetLayerTarget( LAYER_SCHEMATIC_PAGE_BACKGROUND, KIGFX::TARGET_NONCACHED );
++    m_view->SetLayerDisplayOnly( LAYER_SCHEMATIC_PAGE_BACKGROUND );
++
+     m_view->SetLayerTarget( LAYER_OP_VOLTAGES, KIGFX::TARGET_OVERLAY );
+     m_view->SetLayerDisplayOnly( LAYER_OP_VOLTAGES );
+     m_view->SetLayerTarget( LAYER_OP_CURRENTS, KIGFX::TARGET_OVERLAY );
+diff --git a/eeschema/sch_preview_panel.cpp b/eeschema/sch_preview_panel.cpp
+--- a/eeschema/sch_preview_panel.cpp
++++ b/eeschema/sch_preview_panel.cpp
+@@ -131,6 +131,9 @@
+
+     m_view->SetLayerTarget( LAYER_DRAWINGSHEET , KIGFX::TARGET_NONCACHED );
+     m_view->SetLayerDisplayOnly( LAYER_DRAWINGSHEET ) ;
++
++    m_view->SetLayerTarget( LAYER_SCHEMATIC_PAGE_BACKGROUND, KIGFX::TARGET_NONCACHED );
++    m_view->SetLayerDisplayOnly( LAYER_SCHEMATIC_PAGE_BACKGROUND );
+ }
+
+
+diff --git a/eeschema/sch_view.cpp b/eeschema/sch_view.cpp
+--- a/eeschema/sch_view.cpp
++++ b/eeschema/sch_view.cpp
+@@ -123,6 +123,7 @@
+     m_drawingSheet->SetFileName( TO_UTF8( aScreen->GetFileName() ) );
+     m_drawingSheet->SetColorLayer( LAYER_SCHEMATIC_DRAWINGSHEET );
+     m_drawingSheet->SetPageBorderColorLayer( LAYER_SCHEMATIC_PAGE_LIMITS );
++    m_drawingSheet->SetPageBackgroundColorLayer( LAYER_SCHEMATIC_PAGE_BACKGROUND );
+     m_drawingSheet->SetIsFirstPage( aScreen->GetVirtualPageNumber() == 1 );
+
+     wxString currentVariant = aScreen->Schematic()->GetCurrentVariant();
+diff --git a/eeschema/dialogs/panel_eeschema_color_settings.cpp b/eeschema/dialogs/panel_eeschema_color_settings.cpp
+--- a/eeschema/dialogs/panel_eeschema_color_settings.cpp
++++ b/eeschema/dialogs/panel_eeschema_color_settings.cpp
+@@ -143,7 +143,8 @@
+     for( SCH_LAYER_ID layer = SCH_LAYER_ID_START; layer < SCH_LAYER_ID_END; ++layer )
+     {
+         if( bgcolor == m_currentSettings->GetColor( layer )
+-            && layer != LAYER_SCHEMATIC_BACKGROUND && layer != LAYER_SHEET_BACKGROUND )
++            && layer != LAYER_SCHEMATIC_BACKGROUND && layer != LAYER_SHEET_BACKGROUND
++            && layer != LAYER_SCHEMATIC_PAGE_BACKGROUND )
+         {
+             wxString msg = _( "Some items have the same color as the background\n"
+                               "and they will not be seen on the screen.  Are you\n"
+@@ -170,7 +171,8 @@
+         // Do not allow non-background layers to be completely white.
+         // This ensures the BW printing recognizes that the colors should be printed black.
+         if( color == COLOR4D::WHITE && layer != LAYER_SCHEMATIC_BACKGROUND
+-                && layer != LAYER_SHEET_BACKGROUND )
++                && layer != LAYER_SHEET_BACKGROUND
++                && layer != LAYER_SCHEMATIC_PAGE_BACKGROUND )
+         {
+             color.Darken( 0.01 );
+         }
+@@ -259,6 +261,7 @@
+     m_drawingSheet = new DS_PROXY_VIEW_ITEM( schIUScale, m_page, nullptr, m_titleBlock, nullptr );
+     m_drawingSheet->SetColorLayer( LAYER_SCHEMATIC_DRAWINGSHEET );
+     m_drawingSheet->SetPageBorderColorLayer( LAYER_SCHEMATIC_PAGE_LIMITS );
++    m_drawingSheet->SetPageBackgroundColorLayer( LAYER_SCHEMATIC_PAGE_BACKGROUND );
+     view->Add( m_drawingSheet );
+
+     // TODO: It would be nice to parse a schematic file here.
+@@ -496,7 +499,7 @@
+     auto settings = static_cast<SCH_RENDER_SETTINGS*>( view->GetPainter()->GetSettings() );
+     settings->LoadColors( m_currentSettings );
+
+-    m_preview->GetGAL()->SetClearColor( settings->GetBackgroundColor() );
++    m_preview->GetGAL()->SetClearColor( settings->GetClearColor() );
+
+     view->UpdateAllItems( KIGFX::COLOR );
+     auto rect = m_preview->GetScreenRect();
+diff --git a/eeschema/tools/sch_editor_control.cpp b/eeschema/tools/sch_editor_control.cpp
+--- a/eeschema/tools/sch_editor_control.cpp
++++ b/eeschema/tools/sch_editor_control.cpp
+@@ -318,6 +318,7 @@
+         }
+
+         view->SetLayerVisible( LAYER_DRAWINGSHEET, aIncludeDrawingSheet );
++        view->SetLayerVisible( LAYER_SCHEMATIC_PAGE_BACKGROUND, aIncludeDrawingSheet );
+
+         // Create and add drawing sheet proxy view item if requested
+         std::unique_ptr<DS_PROXY_VIEW_ITEM> drawingSheet;
+@@ -334,6 +335,7 @@
+             drawingSheet->SetFileName( TO_UTF8( screen->GetFileName() ) );
+             drawingSheet->SetColorLayer( LAYER_SCHEMATIC_DRAWINGSHEET );
+             drawingSheet->SetPageBorderColorLayer( LAYER_SCHEMATIC_PAGE_LIMITS );
++            drawingSheet->SetPageBackgroundColorLayer( LAYER_SCHEMATIC_PAGE_BACKGROUND );
+             drawingSheet->SetIsFirstPage( screen->GetVirtualPageNumber() == 1 );
+             drawingSheet->SetSheetName( TO_UTF8( aFrame->GetScreenDesc() ) );
+             drawingSheet->SetSheetPath( TO_UTF8( aFrame->GetFullScreenDesc() ) );
+diff --git a/eeschema/eeschema_jobs_handler.cpp b/eeschema/eeschema_jobs_handler.cpp
+--- a/eeschema/eeschema_jobs_handler.cpp
++++ b/eeschema/eeschema_jobs_handler.cpp
+@@ -1415,6 +1415,7 @@
+     drawingSheet->SetFileName( TO_UTF8( aSch->RootScreen()->GetFileName() ) );
+     drawingSheet->SetColorLayer( LAYER_SCHEMATIC_DRAWINGSHEET );
+     drawingSheet->SetPageBorderColorLayer( LAYER_SCHEMATIC_PAGE_LIMITS );
++    drawingSheet->SetPageBackgroundColorLayer( LAYER_SCHEMATIC_PAGE_BACKGROUND );
+     drawingSheet->SetIsFirstPage( aSch->RootScreen()->GetVirtualPageNumber() == 1 );
+
+     wxString currentVariant = aSch->GetCurrentVariant();
+diff --git a/eeschema/printing/sch_printout.cpp b/eeschema/printing/sch_printout.cpp
+--- a/eeschema/printing/sch_printout.cpp
++++ b/eeschema/printing/sch_printout.cpp
+@@ -253,6 +253,7 @@
+     }
+
+     view->SetLayerVisible( LAYER_DRAWINGSHEET, printDrawingSheet );
++    view->SetLayerVisible( LAYER_SCHEMATIC_PAGE_BACKGROUND, printDrawingSheet );
+
+     // Don't draw the selection if it's not from the current screen
+     for( EDA_ITEM* item : selTool->GetSelection() )
