@@ -48,6 +48,9 @@ KICAD_LIBRARY_DATA_DIR="${KICAD_LIBRARY_DATA_DIR:-$KICAD_DATA_DIR}"
 KICAD_DOCS_DIR="${KICAD_DOCS_DIR:-$KICAD_INSTALL_PREFIX/share/doc/kicad}"
 KICAD_LIB_DIR="${KICAD_LIB_DIR:-$KICAD_INSTALL_PREFIX/$KICAD_INSTALL_LIBDIR}"
 KICAD_USER_PLUGIN_DIR="${KICAD_USER_PLUGIN_DIR:-$KICAD_LIB_DIR/kicad/plugins}"
+KICAD_BUILD_PYTHON="${KICAD_BUILD_PYTHON:-/usr/bin/python3}"
+KICAD_AUTO_INSTALL_DEPS="${KICAD_AUTO_INSTALL_DEPS:-1}"
+KICAD_AUTO_ADD_PPA="${KICAD_AUTO_ADD_PPA:-ask}"
 SYSTEM_LIB_DIR="/usr/lib/$MULTIARCH"
 SYSTEM_SHARE_DIR="/usr/share"
 KICAD_OFFICIAL_LIBRARY_PACKAGES=(kicad-symbols kicad-footprints kicad-templates kicad-packages3d)
@@ -96,6 +99,130 @@ sudo_atomic_copy() {
     run_sudo mv -f "$tmp" "$dst"
 }
 
+resolve_build_python() {
+    local py="$KICAD_BUILD_PYTHON"
+
+    if [[ "$py" != */* ]]; then
+        py=$(command -v "$py" 2>/dev/null || true)
+    fi
+
+    [[ -n "$py" && -x "$py" ]] || die "Python для сборки не найден: ${KICAD_BUILD_PYTHON:-<empty>}"
+    echo "$py"
+}
+
+check_wxpython_for_build_python() {
+    local py wx_version
+
+    py=$(resolve_build_python)
+    KICAD_BUILD_PYTHON="$py"
+
+    if ! wx_version=$("$py" -c 'import wx; print(wx.version())' 2>&1); then
+        warn "$wx_version"
+        die "Python для CMake не видит wxPython: $py\nУстановите пакет python3-wxgtk4.0 или задайте KICAD_BUILD_PYTHON=/usr/bin/python3"
+    fi
+
+    ok "wxPython для CMake: $py ($wx_version)"
+}
+
+auto_install_deps_enabled() {
+    case "${KICAD_AUTO_INSTALL_DEPS,,}" in
+        0|false|no|n|off) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+auto_add_ppa_answer() {
+    case "${KICAD_AUTO_ADD_PPA,,}" in
+        1|true|yes|y|on) echo "y" ;;
+        0|false|no|n|off) echo "n" ;;
+        *) echo "ask" ;;
+    esac
+}
+
+kicad_release_ppa_name() {
+    local version="$1" major minor rest
+
+    IFS='.' read -r major minor rest <<< "$version"
+    [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
+
+    echo "ppa:kicad/kicad-${major}.${minor}-releases"
+}
+
+kicad_release_ppa_configured() {
+    local version="$1" major minor rest ppa_path
+
+    IFS='.' read -r major minor rest <<< "$version"
+    [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
+
+    ppa_path="kicad/kicad-${major}.${minor}-releases"
+    grep -Rqs "$ppa_path" /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null
+}
+
+ensure_add_apt_repository() {
+    if command -v add-apt-repository >/dev/null 2>&1; then
+        return
+    fi
+
+    log "Устанавливаю software-properties-common для add-apt-repository..."
+    run_sudo apt-get update -qq
+    run_sudo apt-get install -y software-properties-common
+}
+
+offer_release_ppa_if_needed() {
+    local version="$1" apt_ver ppa answer
+
+    apt_ver=$(apt_version_for_package kicad "$version")
+    if [[ -n "$apt_ver" ]]; then
+        ok "apt видит KiCad $version: $apt_ver"
+        return 0
+    fi
+
+    ppa=$(kicad_release_ppa_name "$version") || {
+        warn "Не могу вывести имя KiCad release PPA из версии: $version"
+        return 0
+    }
+
+    warn "apt не видит пакеты KiCad $version."
+    warn "Без release PPA apt останется на другой ветке и будущий apt upgrade может перетереть staged-сборку."
+
+    if kicad_release_ppa_configured "$version"; then
+        warn "$ppa уже подключён, но apt всё равно не видит KiCad $version."
+        warn "Продолжаю без изменения PPA."
+        return 0
+    fi
+
+    answer=$(auto_add_ppa_answer)
+    if [[ "$answer" == "ask" ]]; then
+        if [[ -t 0 ]]; then
+            ask "Добавить $ppa и выполнить apt-get update? [Y/n]: "
+            read -r answer
+            [[ -z "$answer" ]] && answer="y"
+        else
+            warn "Неинтерактивный запуск: $ppa не добавлен."
+            warn "Для авто-добавления задайте KICAD_AUTO_ADD_PPA=1."
+            return 0
+        fi
+    fi
+
+    if [[ "${answer,,}" == "n" || "${answer,,}" == "no" ]]; then
+        warn "$ppa не добавлен. Долгосрочной гарантии от перезаписи apt-пакетами нет."
+        return 0
+    fi
+
+    ensure_add_apt_repository
+    log "Добавляю $ppa..."
+    run_sudo add-apt-repository -y "$ppa"
+    log "Обновляю apt metadata..."
+    run_sudo apt-get update
+
+    apt_ver=$(apt_version_for_package kicad "$version")
+    if [[ -n "$apt_ver" ]]; then
+        ok "apt теперь видит KiCad $version: $apt_ver"
+    else
+        warn "$ppa добавлен, но KiCad $version всё ещё не найден в apt."
+    fi
+}
+
 # ── Помощь ────────────────────────────────────────────────────────────────
 show_help() {
     cat << 'EOF'
@@ -135,6 +262,12 @@ show_help() {
                Runtime prefix KiCad (по умолчанию: /usr)
   KICAD_INSTALL_LIBDIR
                Runtime libdir относительно prefix (по умолчанию: lib/<multiarch>)
+  KICAD_BUILD_PYTHON
+               Python для CMake/wxPython (по умолчанию: /usr/bin/python3)
+  KICAD_AUTO_INSTALL_DEPS
+               Автоустановка build-deps через apt: 1/0 (по умолчанию: 1)
+  KICAD_AUTO_ADD_PPA
+               Добавление KiCad release PPA: ask/1/0 (по умолчанию: ask)
 
 ПРИМЕРЫ:
   ./scripts/build_and_install.sh --check         # что будет установлено?
@@ -177,10 +310,7 @@ install_kicad_base_if_needed() {
 
     # Найти подходящую apt-версию
     local apt_ver
-    apt_ver=$(apt-cache madison kicad 2>/dev/null \
-        | awk -F'|' '{gsub(/ /,"",$2); print $2}' \
-        | grep "^${version}" \
-        | head -1)
+    apt_ver=$(apt_version_for_package kicad "$version")
 
     if [[ -z "$apt_ver" ]]; then
         warn "В apt нет точной версии $version. Устанавливаем кандидата..."
@@ -211,7 +341,8 @@ apt_version_for_package() {
     apt-cache madison "$pkg" 2>/dev/null \
         | awk -F'|' '{gsub(/ /,"",$2); print $2}' \
         | grep "^${version}" \
-        | head -1
+        | head -1 \
+        || true
 }
 
 installed_package_version() {
@@ -259,7 +390,11 @@ update_library_packages_if_requested() {
         fi
     done
 
-    [[ ${#specs[@]} -gt 0 ]] || die "Нет доступных library packages для KiCad $version"
+    if [[ ${#specs[@]} -eq 0 ]]; then
+        warn "Нет доступных apt library packages для KiCad $version"
+        warn "Продолжаю установку собранного KiCad без обновления official library packages."
+        return 0
+    fi
 
     log "Обновляю official library packages через apt:"
     for spec in "${specs[@]}"; do
@@ -535,6 +670,7 @@ check_build_deps() {
         libglm-dev
         libspnav-dev
         python3-dev
+        python3-wxgtk4.0
         swig
         libocct-modeling-algorithms-dev
         libocct-visualization-dev
@@ -557,9 +693,18 @@ check_build_deps() {
     done
 
     local all_missing=("${missing_tools[@]}" "${missing_libs[@]}")
+    local unique_missing=()
+    local seen=" "
+    for p in "${all_missing[@]}"; do
+        [[ "$seen" == *" $p "* ]] && continue
+        seen+="$p "
+        unique_missing+=("$p")
+    done
+    all_missing=("${unique_missing[@]}")
 
     if [[ ${#all_missing[@]} -eq 0 ]]; then
         ok "Все зависимости установлены"
+        check_wxpython_for_build_python
         return
     fi
 
@@ -568,15 +713,32 @@ check_build_deps() {
         echo "    • $p"
     done
     echo ""
-    ask "Установить через apt? [Y/n]: "
-    read -r answer
-    if [[ "${answer,,}" == "n" ]]; then
+
+    if ! auto_install_deps_enabled; then
         die "Установите зависимости вручную:\n  sudo apt install ${all_missing[*]}"
     fi
 
-    log "Установка зависимостей..."
-    run_sudo apt-get install -y --fix-missing "${all_missing[@]}" 2>&1 | grep -E "^(Get|Unpacking|Setting up|E:)" | head -40
+    log "Автоматически устанавливаю зависимости через apt..."
+    run_sudo apt-get update -qq
+
+    local apt_log apt_status
+    apt_log=$(mktemp /tmp/kicad-build-deps.XXXXXX.log)
+
+    set +e
+    run_sudo apt-get install -y --fix-missing "${all_missing[@]}" >"$apt_log" 2>&1
+    apt_status=$?
+    set -e
+
+    grep -E "^(Get|Получение|Unpacking|Распаковка|Setting up|Настройка|E:|Err:)" "$apt_log" | head -80 || true
+    if [[ $apt_status -ne 0 ]]; then
+        tail -80 "$apt_log" >&2 || true
+        rm -f "$apt_log"
+        die "Не удалось установить зависимости:\n  sudo apt install ${all_missing[*]}"
+    fi
+    rm -f "$apt_log"
+
     ok "Зависимости установлены"
+    check_wxpython_for_build_python
 }
 
 # ── Подготовка исходников ─────────────────────────────────────────────────
@@ -751,16 +913,23 @@ build_kicad() {
     local configure_log="$build_dir/configure.log"
     local build_log="$build_dir/build.log"
     local install_log="$build_dir/install.log"
+    local build_python
+
+    build_python=$(resolve_build_python)
 
     rm -rf "$build_dir"
     mkdir -p "$build_dir"
 
     log "Конфигурация CMake..."
+    log "Python:    $build_python"
     set +e
     cmake -S "$src" -B "$build_dir" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX="$KICAD_INSTALL_PREFIX" \
         -DCMAKE_INSTALL_LIBDIR="$KICAD_INSTALL_LIBDIR" \
+        -DPYTHON_EXECUTABLE="$build_python" \
+        -DPython_EXECUTABLE="$build_python" \
+        -DPython3_EXECUTABLE="$build_python" \
         -DKICAD_DATA="$KICAD_DATA_DIR" \
         -DKICAD_LIBRARY_DATA="$KICAD_LIBRARY_DATA_DIR" \
         -DKICAD_DOCS="$KICAD_DOCS_DIR" \
@@ -1288,6 +1457,11 @@ main() {
         exit 0
     fi
 
+    # ── 2.1. Проверить apt-источник целевой ветки KiCad ──
+    if ! $MODE_CHECK && ! $MODE_BUILD_ONLY; then
+        offer_release_ppa_if_needed "$version"
+    fi
+
     # ── 2.5. Убедиться что базовый KiCad установлен ──
     if ! $MODE_CHECK && ! $MODE_BUILD_ONLY; then
         install_kicad_base_if_needed "$version"
@@ -1409,3 +1583,4 @@ main() {
 }
 
 main "$@"
+exit $?
