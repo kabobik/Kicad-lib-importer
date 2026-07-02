@@ -1,7 +1,7 @@
 # KiCad Local Patches
 
 Коллекция патчей для KiCad с автоматической сборкой и установкой.  
-Патчи протестированы на **KiCad 9.0.7** и **9.0.8** (Linux, Debian/Ubuntu).
+Патчи протестированы на **KiCad 9.0.7** и **9.0.8** (Debian/Ubuntu); для Arch Linux добавлен отдельный установщик.
 
 ## Патчи
 
@@ -19,6 +19,8 @@
 
 ## Быстрый старт
 
+### Debian / Ubuntu
+
 ```bash
 # 1. Посмотреть план (ничего не меняет)
 ./scripts/build_and_install.sh --check
@@ -31,6 +33,27 @@
 
 # 4. Откат к оригинальному KiCad
 ./scripts/build_and_install.sh --restore
+```
+
+### Arch Linux
+
+```bash
+# 1. Посмотреть план. Если --version не задан, берётся самая свежая
+#    поддержанная версия из patches/kicad-X.X.X.
+./scripts/build_and_install_arch.sh --check
+
+# 2. Собрать и установить. Скрипт сам поставит базовый KiCad,
+#    kicad-library и kicad-library-3d через pacman, если их нет.
+./scripts/build_and_install_arch.sh
+
+# 3. Явная версия
+./scripts/build_and_install_arch.sh --version 10.0.4 --rebuild
+
+# 4. Повторная установка из кэша
+./scripts/build_and_install_arch.sh --from-cache
+
+# 5. Откат к оригинальным файлам Arch-пакета
+./scripts/build_and_install_arch.sh --restore
 ```
 
 ## Обновление до KiCad 10.0.4
@@ -79,7 +102,8 @@ patches/
   kicad-10.0.4/         # combined diff для 10.0.4
   standalone/           # независимые патчи (gost, bus-entry)
 scripts/
-  build_and_install.sh  # главный скрипт: патч → сборка → установка
+  build_and_install.sh       # Debian/Ubuntu: патч → сборка → установка
+  build_and_install_arch.sh  # Arch Linux: pacman + /usr/lib layout
   fix_kicad_altium.sh   # устаревший скрипт (только altium-null-byte)
   apply_smooth_zoom_patch.sh  # устаревший скрипт (только smooth-zoom)
 tests/
@@ -98,8 +122,8 @@ kicad-src/              # gitignored: исходники KiCad (скачиваю
 
 ## Требования
 
-- **ОС:** Ubuntu / Debian (apt)
-- **KiCad:** установленный системный KiCad 9.0.x
+- **ОС:** Ubuntu / Debian (`scripts/build_and_install.sh`) или Arch Linux (`scripts/build_and_install_arch.sh`)
+- **KiCad:** для Debian/Ubuntu — установленный системный KiCad 9.0.x; для Arch — необязательно, установщик сам ставит `kicad`, `kicad-library`, `kicad-library-3d`
 - **Для сборки:** `cmake`, `ninja-build`, `g++`, `git`, `patch`  
   + dev-пакеты KiCad (см. [официальный BUILD.md](https://gitlab.com/kicad/code/kicad/-/blob/master/BUILD.md))
 - **`sudo`:** для записи в системную директорию KiCad
