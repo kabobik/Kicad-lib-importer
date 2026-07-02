@@ -34,6 +34,50 @@
 # 4. Откат к оригинальному KiCad
 ./scripts/build_and_install.sh --restore
 ```
+## Клиентский массовый KiCad-маппинг
+
+Скрипт `scripts/kicad_mapping.py` предназначен для массовой правки EDA-Core
+из клиентского окружения KiCad. Параметры подключения он умеет читать из
+`.kicad_dbl` (`source.connection_string`), поэтому отдельный серверный `.env`
+не обязателен. Файл подключения ищется автоматически: `KICAD_DBL_PATH`,
+`${KICAD_LIB_DIR_USER}/eda-core.kicad_dbl`, пути из `kicad_common.json`, затем
+типовые пользовательские директории KiCad. Если в файле KiCad указан read-only
+пользователь, для записи переопределите пользователя и пароль через
+`DB_USER` / `DB_PASSWORD` или `--db-user` / `--db-password`.
+
+```bash
+# Один раз подготовить Python-драйвер PostgreSQL
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+
+# Проверить, какое подключение будет использовано
+./scripts/kicad_mapping.py connection
+
+# Сначала посмотреть выборку: резисторы 0603
+./scripts/kicad_mapping.py filter -c "Резисторы" -t 0603 --no-output
+
+# Массово прописать symbol, footprint и KiCad Reference override
+./scripts/kicad_mapping.py apply \
+  -c "Резисторы" -t 0603 \
+  --symbol "Ki-Resistors:R-0,05" \
+  --footprint "Ki-Resistors:R_0603" \
+  --reference-prefix R
+
+# Более гибкие поля поиска и предварительный прогон без записи
+./scripts/kicad_mapping.py apply \
+  --filter category=Резисторы \
+  --filter tolerance=1% \
+  --set symbol=Device:R \
+  --set footprint=Resistor_SMD:R_0603_1608Metric \
+  --dry-run
+```
+
+Поле `reference_prefix` в базе попадает в KiCad как `Reference`; его же можно
+задавать алиасами `--reference` или `--designator`. Список поддерживаемых полей:
+
+```bash
+./scripts/kicad_mapping.py fields
+```
 
 ### Arch Linux
 
