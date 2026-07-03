@@ -1,0 +1,943 @@
+diff --git a/include/widgets/lib_tree.h b/include/widgets/lib_tree.h
+--- a/include/widgets/lib_tree.h
++++ b/include/widgets/lib_tree.h
+@@ -57,7 +57,8 @@
+         FILTERS     = 0x02,
+         DETAILS     = 0x04,
+         ALL_WIDGETS = 0x0F,
+-        MULTISELECT = 0x10
++        MULTISELECT = 0x10,
++        NO_HOVER_PREVIEW = 0x20
+     };
+ 
+     /**
+@@ -178,7 +179,7 @@
+ 
+     void BlockPreview( bool aBlock )
+     {
+-        m_previewDisabled = aBlock;
++        m_previewDisabled = aBlock || !m_hoverPreviewEnabled;
+     }
+ 
+     void ShutdownPreviews();
+@@ -280,6 +281,7 @@
+     wxRect             m_previewItemRect;
+     wxPopupWindow*     m_previewWindow;
+     bool               m_previewDisabled;
++    bool               m_hoverPreviewEnabled;
+ };
+ 
+ /// Custom event sent when an item is selected in the list.
+diff --git a/common/widgets/lib_tree.cpp b/common/widgets/lib_tree.cpp
+--- a/common/widgets/lib_tree.cpp
++++ b/common/widgets/lib_tree.cpp
+@@ -64,7 +64,8 @@
+         m_filtersSizer( nullptr ),
+         m_skipNextRightClick( false ),
+         m_previewWindow( nullptr ),
+-        m_previewDisabled( false )
++        m_previewDisabled( aFlags & NO_HOVER_PREVIEW ),
++        m_hoverPreviewEnabled( !( aFlags & NO_HOVER_PREVIEW ) )
+ {
+     wxBoxSizer* sizer = new wxBoxSizer( wxVERTICAL );
+ 
+@@ -770,6 +771,9 @@
+ 
+ void LIB_TREE::showPreview( wxDataViewItem aItem )
+ {
++    if( !m_hoverPreviewEnabled )
++        return;
++
+     if( aItem.IsOk() && m_adapter->HasPreview( aItem ) )
+     {
+         m_previewItem = aItem;
+@@ -818,7 +822,7 @@
+     if( m_tree_ctrl->IsShownOnScreen() )
+         mouseOverWindow |= m_tree_ctrl->GetScreenRect().Contains( screenPos );
+ 
+-    if( m_previewDisabled || topLevelFocus != topLevelParent || !mouseOverWindow )
++    if( m_previewDisabled || !m_hoverPreviewEnabled || topLevelFocus != topLevelParent || !mouseOverWindow )
+     {
+         m_hoverTimer.Stop();
+         hidePreview();
+@@ -860,7 +864,7 @@
+ {
+     hidePreview();
+ 
+-    if( !m_tree_ctrl->IsShownOnScreen() || m_previewDisabled )
++    if( !m_tree_ctrl->IsShownOnScreen() || m_previewDisabled || !m_hoverPreviewEnabled )
+         return;
+ 
+     wxDataViewItem    item;
+@@ -1041,7 +1045,7 @@
+         }
+     }
+ 
+-    m_previewDisabled = false;
++    m_previewDisabled = !m_hoverPreviewEnabled;
+ }
+ 
+ 
+@@ -1109,7 +1113,7 @@
+         m_adapter->SetGroupColumn( wxEmptyString );
+     }
+ 
+-    m_previewDisabled = false;
++    m_previewDisabled = !m_hoverPreviewEnabled;
+ }
+ 
+ 
+diff --git a/eeschema/symbol_tree_model_adapter.cpp b/eeschema/symbol_tree_model_adapter.cpp
+--- a/eeschema/symbol_tree_model_adapter.cpp
++++ b/eeschema/symbol_tree_model_adapter.cpp
+@@ -69,6 +69,7 @@
+         m_colWidths[pair.first] = pair.second;
+ 
+     m_shownColumns = m_cfg.columns;
++    m_groupByColumn = m_cfg.group_by_column;
+ 
+     if( m_shownColumns.empty() )
+         m_shownColumns = {  _HKI( "Item" ), _HKI( "Description" ), GetDefaultFieldName( FIELD_T::VALUE, false ) };
+diff --git a/eeschema/widgets/sch_symbol_library_pane.h b/eeschema/widgets/sch_symbol_library_pane.h
+--- a/eeschema/widgets/sch_symbol_library_pane.h
++++ b/eeschema/widgets/sch_symbol_library_pane.h
+@@ -0,0 +1,70 @@
++/*
++ * This program source code file is part of KiCad, a free EDA CAD application.
++ *
++ * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
++ *
++ * This program is free software: you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License as published by the
++ * Free Software Foundation, either version 3 of the License, or (at your
++ * option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#ifndef SCH_SYMBOL_LIBRARY_PANE_H
++#define SCH_SYMBOL_LIBRARY_PANE_H
++
++#include <lib_tree_model_adapter.h>
++#include <template_fieldnames.h>
++#include <vector>
++#include <wx/panel.h>
++
++class FOOTPRINT_PREVIEW_WIDGET;
++class FOOTPRINT_SELECT_WIDGET;
++class HTML_WINDOW;
++class LIB_TREE;
++class SCH_EDIT_FRAME;
++class SYMBOL_PREVIEW_WIDGET;
++class wxTimer;
++
++
++class SCH_SYMBOL_LIBRARY_PANE : public wxPanel
++{
++public:
++    explicit SCH_SYMBOL_LIBRARY_PANE( SCH_EDIT_FRAME* aFrame );
++    ~SCH_SYMBOL_LIBRARY_PANE() override;
++
++    void Regenerate();
++    void ShutdownCanvases();
++
++private:
++    void onOpenLibsTimer( wxTimerEvent& aEvent );
++    void onFootprintSelected( wxCommandEvent& aEvent );
++    void onSymbolSelected( wxCommandEvent& aEvent );
++    void onSymbolChosen( wxCommandEvent& aEvent );
++
++    void showFootprintFor( const LIB_ID& aLibId );
++    void showFootprint( const wxString& aFootprint );
++    void populateFootprintSelector( const LIB_ID& aLibId );
++    void placeSelectedSymbol();
++
++private:
++    SCH_EDIT_FRAME*                         m_frame;
++    wxObjectDataPtr<LIB_TREE_MODEL_ADAPTER> m_adapter;
++    LIB_TREE*                               m_tree;
++    HTML_WINDOW*                            m_details;
++    SYMBOL_PREVIEW_WIDGET*                  m_symbolPreview;
++    FOOTPRINT_SELECT_WIDGET*                m_fpSelect;
++    FOOTPRINT_PREVIEW_WIDGET*               m_fpPreview;
++    wxTimer*                                m_openLibsTimer;
++    wxString                                m_fpOverride;
++    std::vector<std::pair<FIELD_T, wxString>> m_fieldEdits;
++};
++
++#endif /* SCH_SYMBOL_LIBRARY_PANE_H */
+diff --git a/eeschema/widgets/sch_symbol_library_pane.cpp b/eeschema/widgets/sch_symbol_library_pane.cpp
+--- a/eeschema/widgets/sch_symbol_library_pane.cpp
++++ b/eeschema/widgets/sch_symbol_library_pane.cpp
+@@ -0,0 +1,375 @@
++/*
++ * This program source code file is part of KiCad, a free EDA CAD application.
++ *
++ * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
++ *
++ * This program is free software: you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License as published by the
++ * Free Software Foundation, either version 3 of the License, or (at your
++ * option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include "sch_symbol_library_pane.h"
++
++#include <class_draw_panel_gal.h>
++#include <eeschema_settings.h>
++#include <kiface_base.h>
++#include <ki_exception.h>
++#include <lib_symbol.h>
++#include <libraries/symbol_library_adapter.h>
++#include <pgm_base.h>
++#include <project_sch.h>
++#include <sch_edit_frame.h>
++#include <sch_screen.h>
++#include <sch_symbol.h>
++#include <settings/common_settings.h>
++#include <settings/settings_manager.h>
++#include <symbol_editor_settings.h>
++#include <symbol_tree_model_adapter.h>
++#include <tool/tool_manager.h>
++#include <tools/sch_actions.h>
++#include <widgets/footprint_preview_widget.h>
++#include <widgets/footprint_select_widget.h>
++#include <widgets/html_window.h>
++#include <widgets/lib_tree.h>
++#include <widgets/symbol_preview_widget.h>
++
++#include <wx/log.h>
++#include <wx/sizer.h>
++#include <wx/timer.h>
++
++
++static wxString s_symbolLibraryPaneSearchString;
++
++
++SCH_SYMBOL_LIBRARY_PANE::SCH_SYMBOL_LIBRARY_PANE( SCH_EDIT_FRAME* aFrame ) :
++        wxPanel( aFrame, wxID_ANY, wxDefaultPosition, wxDefaultSize ),
++        m_frame( aFrame ),
++        m_tree( nullptr ),
++        m_details( nullptr ),
++        m_symbolPreview( nullptr ),
++        m_fpSelect( nullptr ),
++        m_fpPreview( nullptr ),
++        m_openLibsTimer( nullptr )
++{
++    SYMBOL_LIBRARY_ADAPTER* libmgr = PROJECT_SCH::SymbolLibAdapter( &m_frame->Prj() );
++
++    // Ensure settings are loaded before background symbol loading starts.
++    GetAppSettings<EESCHEMA_SETTINGS>( "eeschema" );
++    GetAppSettings<SYMBOL_EDITOR_SETTINGS>( "symbol_editor" );
++
++    m_adapter = SYMBOL_TREE_MODEL_ADAPTER::Create( m_frame, libmgr );
++    SYMBOL_TREE_MODEL_ADAPTER* adapter = static_cast<SYMBOL_TREE_MODEL_ADAPTER*>( m_adapter.get() );
++
++    adapter->AddLibraries( m_frame );
++
++    wxBoxSizer* sizer = new wxBoxSizer( wxVERTICAL );
++
++    m_details = new HTML_WINDOW( this, wxID_ANY, wxDefaultPosition, wxDefaultSize );
++    m_tree = new LIB_TREE( this, wxT( "symbols" ), m_adapter,
++                           LIB_TREE::SEARCH | LIB_TREE::DETAILS | LIB_TREE::NO_HOVER_PREVIEW,
++                           m_details );
++
++    EDA_DRAW_PANEL_GAL::GAL_TYPE backend = EDA_DRAW_PANEL_GAL::GAL_TYPE::GAL_TYPE_OPENGL;
++
++    if( m_frame->GetCanvas() )
++        backend = m_frame->GetCanvas()->GetBackend();
++    else if( COMMON_SETTINGS* cfg = Pgm().GetCommonSettings() )
++        backend = static_cast<EDA_DRAW_PANEL_GAL::GAL_TYPE>( cfg->m_Graphics.canvas_type );
++
++    m_symbolPreview = new SYMBOL_PREVIEW_WIDGET( this, &m_frame->Kiway(), true, backend );
++    m_symbolPreview->SetLayoutDirection( wxLayout_LeftToRight );
++
++    m_fpSelect = new FOOTPRINT_SELECT_WIDGET( m_frame, this );
++
++    m_fpPreview = new FOOTPRINT_PREVIEW_WIDGET( this, m_frame->Kiway() );
++    m_fpPreview->SetUserUnits( m_frame->GetUserUnits() );
++
++    if( m_fpPreview->IsInitialized() )
++        m_fpPreview->SetStatusText( wxEmptyString );
++
++    m_details->SetMinSize( wxSize( -1, FromDIP( 88 ) ) );
++    m_symbolPreview->SetMinSize( wxSize( -1, FromDIP( 140 ) ) );
++    m_fpPreview->SetMinSize( wxSize( -1, FromDIP( 140 ) ) );
++
++    sizer->Add( m_tree, 4, wxEXPAND | wxALL, 4 );
++    sizer->Add( m_details, 2, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 4 );
++    sizer->Add( m_symbolPreview, 3, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 4 );
++    sizer->Add( m_fpSelect, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 4 );
++    sizer->Add( m_fpPreview, 3, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 4 );
++
++    SetSizer( sizer );
++    Layout();
++
++    adapter->FinishTreeInitialization();
++
++    if( !s_symbolLibraryPaneSearchString.IsEmpty() )
++        m_tree->SetSearchString( s_symbolLibraryPaneSearchString );
++
++    m_fpSelect->Load( m_frame->Kiway(), m_frame->Prj() );
++    populateFootprintSelector( LIB_ID() );
++
++    m_adapter->RegisterLazyLoadHandler( [this]()
++                                        {
++                                            Regenerate();
++                                        } );
++
++    Bind( EVT_LIBITEM_SELECTED, &SCH_SYMBOL_LIBRARY_PANE::onSymbolSelected, this );
++    Bind( EVT_LIBITEM_CHOSEN, &SCH_SYMBOL_LIBRARY_PANE::onSymbolChosen, this );
++    m_fpSelect->Bind( EVT_FOOTPRINT_SELECTED, &SCH_SYMBOL_LIBRARY_PANE::onFootprintSelected, this );
++
++    m_openLibsTimer = new wxTimer( this );
++    Bind( wxEVT_TIMER, &SCH_SYMBOL_LIBRARY_PANE::onOpenLibsTimer, this, m_openLibsTimer->GetId() );
++    m_openLibsTimer->StartOnce( 300 );
++}
++
++
++SCH_SYMBOL_LIBRARY_PANE::~SCH_SYMBOL_LIBRARY_PANE()
++{
++    s_symbolLibraryPaneSearchString = m_tree->GetSearchString();
++
++    Unbind( EVT_LIBITEM_SELECTED, &SCH_SYMBOL_LIBRARY_PANE::onSymbolSelected, this );
++    Unbind( EVT_LIBITEM_CHOSEN, &SCH_SYMBOL_LIBRARY_PANE::onSymbolChosen, this );
++
++    if( m_fpSelect )
++        m_fpSelect->Unbind( EVT_FOOTPRINT_SELECTED, &SCH_SYMBOL_LIBRARY_PANE::onFootprintSelected, this );
++
++    if( m_openLibsTimer )
++    {
++        m_openLibsTimer->Stop();
++        Unbind( wxEVT_TIMER, &SCH_SYMBOL_LIBRARY_PANE::onOpenLibsTimer, this,
++                m_openLibsTimer->GetId() );
++        delete m_openLibsTimer;
++    }
++
++    if( m_adapter )
++        m_adapter->SaveSettings();
++}
++
++
++void SCH_SYMBOL_LIBRARY_PANE::Regenerate()
++{
++    LIB_ID savedSelection = m_tree->GetSelectedLibId();
++    m_tree->Regenerate( true );
++
++    if( savedSelection.IsValid() )
++        m_tree->CenterLibId( savedSelection );
++}
++
++
++void SCH_SYMBOL_LIBRARY_PANE::ShutdownCanvases()
++{
++    if( m_symbolPreview && m_symbolPreview->GetCanvas() )
++    {
++        m_symbolPreview->GetCanvas()->SetEvtHandlerEnabled( false );
++        m_symbolPreview->GetCanvas()->StopDrawing();
++    }
++
++    if( m_fpPreview && m_fpPreview->IsInitialized() && m_fpPreview->GetPreviewPanel() )
++    {
++        EDA_DRAW_PANEL_GAL* canvas = m_fpPreview->GetPreviewPanel()->GetCanvas();
++
++        if( canvas )
++        {
++            canvas->SetEvtHandlerEnabled( false );
++            canvas->StopDrawing();
++        }
++    }
++}
++
++
++void SCH_SYMBOL_LIBRARY_PANE::onOpenLibsTimer( wxTimerEvent& aEvent )
++{
++    if( EESCHEMA_SETTINGS* cfg = dynamic_cast<EESCHEMA_SETTINGS*>( Kiface().KifaceSettings() ) )
++        m_adapter->OpenLibs( cfg->m_LibTree.open_libs );
++}
++
++
++void SCH_SYMBOL_LIBRARY_PANE::showFootprintFor( const LIB_ID& aLibId )
++{
++    if( !m_fpPreview || !m_fpPreview->IsInitialized() )
++        return;
++
++    LIB_SYMBOL* symbol = nullptr;
++
++    try
++    {
++        symbol = PROJECT_SCH::SymbolLibAdapter( &m_frame->Prj() )->LoadSymbol( aLibId );
++    }
++    catch( const IO_ERROR& ioe )
++    {
++        wxLogError( _( "Error loading symbol %s from library '%s'." ) + wxS( "\n%s" ),
++                    aLibId.GetLibItemName().wx_str(),
++                    aLibId.GetLibNickname().wx_str(),
++                    ioe.What() );
++    }
++
++    if( !symbol )
++        return;
++
++    SCH_FIELD* fpField = symbol->GetField( FIELD_T::FOOTPRINT );
++    wxString   fpName = fpField ? fpField->GetFullText() : wxString( "" );
++
++    showFootprint( fpName );
++}
++
++
++void SCH_SYMBOL_LIBRARY_PANE::showFootprint( const wxString& aFootprint )
++{
++    if( !m_fpPreview || !m_fpPreview->IsInitialized() )
++        return;
++
++    if( aFootprint == wxEmptyString )
++    {
++        m_fpPreview->SetStatusText( _( "No footprint specified" ) );
++    }
++    else
++    {
++        LIB_ID libId;
++
++        if( libId.Parse( aFootprint ) == -1 && libId.IsValid() )
++        {
++            m_fpPreview->ClearStatus();
++            m_fpPreview->DisplayFootprint( libId );
++        }
++        else
++        {
++            m_fpPreview->SetStatusText( _( "Invalid footprint specified" ) );
++        }
++    }
++}
++
++
++void SCH_SYMBOL_LIBRARY_PANE::populateFootprintSelector( const LIB_ID& aLibId )
++{
++    if( !m_fpSelect )
++        return;
++
++    m_fpSelect->ClearFilters();
++
++    LIB_SYMBOL* symbol = nullptr;
++
++    if( aLibId.IsValid() )
++    {
++        try
++        {
++            symbol = PROJECT_SCH::SymbolLibAdapter( &m_frame->Prj() )->LoadSymbol( aLibId );
++        }
++        catch( const IO_ERROR& ioe )
++        {
++            wxLogError( _( "Error loading symbol %s from library '%s'." ) + wxS( "\n%s" ),
++                        aLibId.GetLibItemName().wx_str(),
++                        aLibId.GetLibNickname().wx_str(),
++                        ioe.What() );
++        }
++    }
++
++    if( symbol )
++    {
++        int pinCount = symbol->GetGraphicalPins( 0, 1 ).size();
++        SCH_FIELD* fpField = symbol->GetField( FIELD_T::FOOTPRINT );
++        wxString   fpName = fpField ? fpField->GetFullText() : wxString( "" );
++
++        m_fpSelect->FilterByPinCount( pinCount );
++        m_fpSelect->FilterByFootprintFilters( symbol->GetFPFilters(), true );
++        m_fpSelect->SetDefaultFootprint( fpName );
++        m_fpSelect->UpdateList();
++        m_fpSelect->Enable();
++    }
++    else
++    {
++        m_fpSelect->UpdateList();
++        m_fpSelect->Disable();
++    }
++}
++
++
++void SCH_SYMBOL_LIBRARY_PANE::onFootprintSelected( wxCommandEvent& aEvent )
++{
++    m_fpOverride = aEvent.GetString();
++
++    std::erase_if( m_fieldEdits, []( const std::pair<FIELD_T, wxString>& aEdit )
++                                  {
++                                      return aEdit.first == FIELD_T::FOOTPRINT;
++                                  } );
++
++    m_fieldEdits.emplace_back( FIELD_T::FOOTPRINT, m_fpOverride );
++    showFootprint( m_fpOverride );
++}
++
++
++void SCH_SYMBOL_LIBRARY_PANE::onSymbolSelected( wxCommandEvent& aEvent )
++{
++    LIB_TREE_NODE* node = m_tree->GetCurrentTreeNode();
++
++    m_fpOverride.clear();
++    m_fieldEdits.clear();
++
++    if( node && node->m_LibId.IsValid() )
++    {
++        m_symbolPreview->DisplaySymbol( node->m_LibId, node->m_Unit );
++
++        if( !node->m_Footprint.IsEmpty() )
++            showFootprint( node->m_Footprint );
++        else
++            showFootprintFor( node->m_LibId );
++
++        populateFootprintSelector( node->m_LibId );
++    }
++    else
++    {
++        m_symbolPreview->SetStatusText( _( "No symbol selected" ) );
++
++        if( m_fpPreview && m_fpPreview->IsInitialized() )
++            m_fpPreview->SetStatusText( wxEmptyString );
++
++        populateFootprintSelector( LIB_ID() );
++    }
++}
++
++
++void SCH_SYMBOL_LIBRARY_PANE::onSymbolChosen( wxCommandEvent& aEvent )
++{
++    placeSelectedSymbol();
++}
++
++
++void SCH_SYMBOL_LIBRARY_PANE::placeSelectedSymbol()
++{
++    int    unit = 0;
++    LIB_ID id = m_tree->GetSelectedLibId( &unit );
++
++    if( !id.IsValid() )
++        return;
++
++    if( unit == 0 )
++        unit = 1;
++
++    LIB_SYMBOL* libSymbol = m_frame->GetLibSymbol( id );
++
++    if( !libSymbol )
++        return;
++
++    PICKED_SYMBOL selection;
++    selection.LibId = id;
++    selection.Unit = unit;
++    selection.Convert = 1;
++    selection.Fields = m_fieldEdits;
++
++    SCH_SYMBOL* symbol = new SCH_SYMBOL( *libSymbol, &m_frame->GetCurrentSheet(), selection,
++                                         VECTOR2I( 0, 0 ), &m_frame->Schematic() );
++
++    if( m_frame->eeconfig()->m_AutoplaceFields.enable )
++        symbol->AutoplaceFields( nullptr, AUTOPLACE_AUTO );
++
++    m_frame->GetToolManager()->PostAction( SCH_ACTIONS::placeSymbol,
++                                           SCH_ACTIONS::PLACE_SYMBOL_PARAMS{ symbol, true } );
++}
+diff --git a/eeschema/CMakeLists.txt b/eeschema/CMakeLists.txt
+--- a/eeschema/CMakeLists.txt
++++ b/eeschema/CMakeLists.txt
+@@ -305,6 +305,7 @@
+     widgets/sch_design_block_preview_widget.cpp
+     widgets/sch_properties_panel.cpp
+     widgets/sch_search_pane.cpp
++    widgets/sch_symbol_library_pane.cpp
+     widgets/search_handlers.cpp
+     widgets/symbol_filter_combobox.cpp
+     widgets/symbol_preview_widget.cpp
+diff --git a/eeschema/eeschema_settings.h b/eeschema/eeschema_settings.h
+--- a/eeschema/eeschema_settings.h
++++ b/eeschema/eeschema_settings.h
+@@ -39,6 +39,7 @@
+ extern const wxAuiPaneInfo& defaultSchSelectionFilterPaneInfo( wxWindow* aWindow );
+ extern const wxAuiPaneInfo& defaultDesignBlocksPaneInfo( wxWindow* aWindow );
+ extern const wxAuiPaneInfo& defaultRemoteSymbolPaneInfo( wxWindow* aWindow );
++extern const wxAuiPaneInfo& defaultSymbolLibraryPaneInfo( wxWindow* aWindow );
+ 
+ 
+ 
+@@ -112,6 +113,10 @@
+         int  remote_symbol_panel_docked_width;
+         int  remote_symbol_panel_float_width;
+         int  remote_symbol_panel_float_height;
++        bool symbol_library_show;
++        int  symbol_library_panel_docked_width;
++        int  symbol_library_panel_float_width;
++        int  symbol_library_panel_float_height;
+     };
+ 
+     struct AUTOPLACE_FIELDS
+diff --git a/eeschema/eeschema_settings.cpp b/eeschema/eeschema_settings.cpp
+--- a/eeschema/eeschema_settings.cpp
++++ b/eeschema/eeschema_settings.cpp
+@@ -173,6 +173,28 @@
+ }
+ 
+ 
++const wxAuiPaneInfo& defaultSymbolLibraryPaneInfo( wxWindow* aWindow )
++{
++    static wxAuiPaneInfo paneInfo;
++
++    paneInfo.Name( wxS( "SymbolLibrary" ) )
++            .Caption( _( "Symbols" ) )
++            .CaptionVisible( true )
++            .PaneBorder( true )
++            .Left().Layer( 3 ).Position( 0 )
++            .TopDockable( false )
++            .BottomDockable( false )
++            .CloseButton( true )
++            .MinSize( aWindow->FromDIP( wxSize( 240, 120 ) ) )
++            .BestSize( aWindow->FromDIP( wxSize( 340, 720 ) ) )
++            .FloatingSize( aWindow->FromDIP( wxSize( 420, 760 ) ) )
++            .FloatingPosition( aWindow->FromDIP( wxPoint( 80, 220 ) ) )
++            .Show( false );
++
++    return paneInfo;
++}
++
++
+ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
+         APP_SETTINGS_BASE( "eeschema", eeschemaSchemaVersion ),
+         m_Appearance(),
+@@ -282,6 +304,18 @@
+     m_params.emplace_back( new PARAM<int>( "aui.remote_symbol_panel_float_height",
+             &m_AuiPanels.remote_symbol_panel_float_height, -1 ) );
+ 
++    m_params.emplace_back( new PARAM<bool>( "aui.symbol_library_show",
++            &m_AuiPanels.symbol_library_show, false ) );
++
++    m_params.emplace_back( new PARAM<int>( "aui.symbol_library_panel_docked_width",
++            &m_AuiPanels.symbol_library_panel_docked_width, -1 ) );
++
++    m_params.emplace_back( new PARAM<int>( "aui.symbol_library_panel_float_width",
++            &m_AuiPanels.symbol_library_panel_float_width, -1 ) );
++
++    m_params.emplace_back( new PARAM<int>( "aui.symbol_library_panel_float_height",
++            &m_AuiPanels.symbol_library_panel_float_height, -1 ) );
++
+     m_params.emplace_back( new PARAM<bool>( "aui.schematic_hierarchy_float",
+             &m_AuiPanels.schematic_hierarchy_float, false ) );
+ 
+diff --git a/eeschema/sch_edit_frame.h b/eeschema/sch_edit_frame.h
+--- a/eeschema/sch_edit_frame.h
++++ b/eeschema/sch_edit_frame.h
+@@ -59,6 +59,7 @@
+ class SCHEMATIC;
+ class SCH_COMMIT;
+ class SCH_DESIGN_BLOCK_PANE;
++class SCH_SYMBOL_LIBRARY_PANE;
+ class PANEL_REMOTE_SYMBOL;
+ class DIALOG_BOOK_REPORTER;
+ class DIALOG_ERC;
+@@ -850,6 +851,8 @@
+ 
+     void ToggleRemoteSymbolPanel();
+ 
++    void ToggleSymbolLibraryPanel();
++
+ 
+     DIALOG_BOOK_REPORTER* GetSymbolDiffDialog();
+ 
+@@ -874,6 +877,11 @@
+      */
+     static const wxString SearchPaneName() { return wxT( "Search" ); }
+ 
++    /**
++     * @return the name of the wxAuiPaneInfo managing the Symbol Library panel.
++     */
++    static const wxString SymbolLibraryPaneName() { return wxT( "SymbolLibrary" ); }
++
+     bool IsSearchPaneShown() { return m_auimgr.GetPane( SearchPaneName() ).IsShown(); }
+ 
+     void FocusSearch();
+@@ -1095,6 +1103,7 @@
+     std::vector<LIB_ID>         m_designBlockHistoryList;
+     SCH_DESIGN_BLOCK_PANE*      m_designBlocksPane;
+     PANEL_REMOTE_SYMBOL*        m_remoteSymbolPane;
++    SCH_SYMBOL_LIBRARY_PANE*    m_symbolLibraryPane;
+ 
+     wxChoice*                   m_currentVariantCtrl;
+ 
+diff --git a/eeschema/sch_edit_frame.cpp b/eeschema/sch_edit_frame.cpp
+--- a/eeschema/sch_edit_frame.cpp
++++ b/eeschema/sch_edit_frame.cpp
+@@ -33,6 +33,7 @@
+ #include <dialogs/dialog_book_reporter.h>
+ #include <dialogs/dialog_symbol_fields_table.h>
+ #include <widgets/sch_design_block_pane.h>
++#include <widgets/sch_symbol_library_pane.h>
+ #include <widgets/panel_remote_symbol.h>
+ #include <wx/srchctrl.h>
+ #include <mail_type.h>
+@@ -171,6 +172,7 @@
+         m_highlightedConnChanged( false ),
+         m_designBlocksPane( nullptr ),
+         m_remoteSymbolPane( nullptr ),
++        m_symbolLibraryPane( nullptr ),
+         m_currentVariantCtrl( nullptr )
+ {
+     m_maximizeByDefault = true;
+@@ -233,6 +235,7 @@
+     m_searchPane = new SCH_SEARCH_PANE( this );
+     m_propertiesPanel = new SCH_PROPERTIES_PANEL( this, this );
+     m_remoteSymbolPane = new PANEL_REMOTE_SYMBOL( this );
++    m_symbolLibraryPane = new SCH_SYMBOL_LIBRARY_PANE( this );
+ 
+     m_propertiesPanel->SetSplitterProportion( eeconfig()->m_AuiPanels.properties_splitter );
+ 
+@@ -273,6 +276,7 @@
+ 
+     m_auimgr.AddPane( m_designBlocksPane, defaultDesignBlocksPaneInfo( this ) );
+     m_auimgr.AddPane( m_remoteSymbolPane, defaultRemoteSymbolPaneInfo( this ) );
++    m_auimgr.AddPane( m_symbolLibraryPane, defaultSymbolLibraryPaneInfo( this ) );
+ 
+     m_auimgr.AddPane( createHighlightedNetNavigator(), defaultNetNavigatorPaneInfo() );
+ 
+@@ -307,11 +311,13 @@
+     wxAuiPaneInfo& selectionFilterPane = m_auimgr.GetPane( wxS( "SelectionFilter" ) );
+     wxAuiPaneInfo& designBlocksPane = m_auimgr.GetPane( DesignBlocksPaneName() );
+     wxAuiPaneInfo& remoteSymbolPane = m_auimgr.GetPane( RemoteSymbolPaneName() );
++    wxAuiPaneInfo& symbolLibraryPane = m_auimgr.GetPane( SymbolLibraryPaneName() );
+ 
+     hierarchy_pane.Show( aui_cfg.show_schematic_hierarchy );
+     netNavigatorPane.Show( aui_cfg.show_net_nav_panel );
+     propertiesPane.Show( aui_cfg.show_properties );
+     designBlocksPane.Show( aui_cfg.design_blocks_show );
++    symbolLibraryPane.Show( aui_cfg.symbol_library_show );
+ 
+     if( m_remoteSymbolPane && !m_remoteSymbolPane->HasDataSources() )
+         remoteSymbolPane.Show( false );
+@@ -370,6 +376,19 @@
+         SetAuiPaneSize( m_auimgr, remoteSymbolPane, aui_cfg.remote_symbol_panel_docked_width, -1 );
+     }
+ 
++    if( aui_cfg.symbol_library_panel_float_width > 0
++            && aui_cfg.symbol_library_panel_float_height > 0 )
++    {
++        symbolLibraryPane.FloatingSize( aui_cfg.symbol_library_panel_float_width,
++                                        aui_cfg.symbol_library_panel_float_height );
++    }
++
++    if( aui_cfg.symbol_library_show )
++    {
++        SetAuiPaneSize( m_auimgr, symbolLibraryPane, aui_cfg.symbol_library_panel_docked_width,
++                        -1 );
++    }
++
+     if( aui_cfg.hierarchy_panel_docked_width > 0 )
+     {
+         // If the net navigator is not show, let the hierarchy navigator take all of the vertical
+@@ -591,6 +610,9 @@
+ {
+     m_hierarchy->Unbind( wxEVT_SIZE, &SCH_EDIT_FRAME::OnResizeHierarchyNavigator, this );
+ 
++    if( m_symbolLibraryPane )
++        m_symbolLibraryPane->ShutdownCanvases();
++
+     // Ensure m_canvasType is up to date, to save it in config
+     m_canvasType = GetCanvas()->GetBackend();
+ 
+@@ -762,6 +784,12 @@
+                 return m_auimgr.GetPane( RemoteSymbolPaneName() ).IsShown();
+             };
+ 
++    auto symbolLibraryCond =
++            [ this ] (const SELECTION& aSel )
++            {
++                return m_auimgr.GetPane( SymbolLibraryPaneName() ).IsShown();
++            };
++
+     auto undoCond =
+             [ this ] (const SELECTION& aSel )
+             {
+@@ -798,6 +826,7 @@
+     mgr->SetConditions( ACTIONS::showProperties,           CHECK( propertiesCond ) );
+     mgr->SetConditions( SCH_ACTIONS::showDesignBlockPanel, CHECK( designBlockCond ) );
+     mgr->SetConditions( SCH_ACTIONS::showRemoteSymbolPanel, CHECK( remoteSymbolCond ) );
++    mgr->SetConditions( SCH_ACTIONS::showSymbolLibraryPanel, CHECK( symbolLibraryCond ) );
+     mgr->SetConditions( ACTIONS::toggleGrid,               CHECK( cond.GridVisible() ) );
+     mgr->SetConditions( ACTIONS::toggleGridOverrides,      CHECK( cond.GridOverrides() ) );
+ 
+@@ -2069,6 +2098,7 @@
+     m_auimgr.GetPane( m_propertiesPanel ).Caption( _( "Properties" ) );
+     m_auimgr.GetPane( m_designBlocksPane ).Caption( _( "Design Blocks" ) );
+     m_auimgr.GetPane( RemoteSymbolPaneName() ).Caption( _( "Remote Symbols" ) );
++    m_auimgr.GetPane( SymbolLibraryPaneName() ).Caption( _( "Symbols" ) );
+     m_auimgr.Update();
+     m_hierarchy->UpdateHierarchyTree();
+ 
+@@ -3018,6 +3048,51 @@
+         }
+ 
+         m_auimgr.Update();
++    }
++}
++
++
++void SCH_EDIT_FRAME::ToggleSymbolLibraryPanel()
++{
++    EESCHEMA_SETTINGS* cfg = eeconfig();
++
++    wxCHECK( cfg, /* void */ );
++
++    wxAuiPaneInfo& symbolLibraryPane = m_auimgr.GetPane( SymbolLibraryPaneName() );
++
++    symbolLibraryPane.Show( !symbolLibraryPane.IsShown() );
++
++    if( symbolLibraryPane.IsShown() )
++    {
++        if( symbolLibraryPane.IsFloating() )
++        {
++            symbolLibraryPane.FloatingSize( cfg->m_AuiPanels.symbol_library_panel_float_width,
++                                            cfg->m_AuiPanels.symbol_library_panel_float_height );
++            m_auimgr.Update();
++        }
++        else if( cfg->m_AuiPanels.symbol_library_panel_docked_width > 0 )
++        {
++            SetAuiPaneSize( m_auimgr, symbolLibraryPane,
++                            cfg->m_AuiPanels.symbol_library_panel_docked_width, -1 );
++        }
++        else
++        {
++            m_auimgr.Update();
++        }
++    }
++    else
++    {
++        if( symbolLibraryPane.IsFloating() )
++        {
++            cfg->m_AuiPanels.symbol_library_panel_float_width = symbolLibraryPane.floating_size.x;
++            cfg->m_AuiPanels.symbol_library_panel_float_height = symbolLibraryPane.floating_size.y;
++        }
++        else if( m_symbolLibraryPane )
++        {
++            cfg->m_AuiPanels.symbol_library_panel_docked_width = m_symbolLibraryPane->GetSize().x;
++        }
++
++        m_auimgr.Update();
+     }
+ }
+ 
+diff --git a/eeschema/eeschema_config.cpp b/eeschema/eeschema_config.cpp
+--- a/eeschema/eeschema_config.cpp
++++ b/eeschema/eeschema_config.cpp
+@@ -36,6 +36,7 @@
+ #include <schematic.h>
+ #include <widgets/hierarchy_pane.h>
+ #include <widgets/sch_design_block_pane.h>
++#include <widgets/sch_symbol_library_pane.h>
+ #include <widgets/sch_search_pane.h>
+ #include <widgets/panel_remote_symbol.h>
+ #include <widgets/panel_sch_selection_filter.h>
+@@ -371,6 +372,19 @@
+             cfg->m_AuiPanels.remote_symbol_panel_float_height = remoteSymbolPane.floating_size.y;
+             cfg->m_AuiPanels.remote_symbol_panel_float_width = remoteSymbolPane.floating_size.x;
+         }
++
++        wxAuiPaneInfo& symbolLibraryPane = m_auimgr.GetPane( SymbolLibraryPaneName() );
++        cfg->m_AuiPanels.symbol_library_show = symbolLibraryPane.IsShown();
++
++        if( symbolLibraryPane.IsDocked() )
++        {
++            cfg->m_AuiPanels.symbol_library_panel_docked_width = m_symbolLibraryPane->GetSize().x;
++        }
++        else
++        {
++            cfg->m_AuiPanels.symbol_library_panel_float_height = symbolLibraryPane.floating_size.y;
++            cfg->m_AuiPanels.symbol_library_panel_float_width = symbolLibraryPane.floating_size.x;
++        }
+     }
+ }
+ 
+diff --git a/eeschema/tools/sch_actions.h b/eeschema/tools/sch_actions.h
+--- a/eeschema/tools/sch_actions.h
++++ b/eeschema/tools/sch_actions.h
+@@ -206,6 +206,7 @@
+     // Design Block management
+     static TOOL_ACTION showDesignBlockPanel;
+     static TOOL_ACTION showRemoteSymbolPanel;
++    static TOOL_ACTION showSymbolLibraryPanel;
+     static TOOL_ACTION saveSheetAsDesignBlock;
+     static TOOL_ACTION saveSelectionAsDesignBlock;
+     static TOOL_ACTION updateDesignBlockFromSheet;
+diff --git a/eeschema/tools/sch_actions.cpp b/eeschema/tools/sch_actions.cpp
+--- a/eeschema/tools/sch_actions.cpp
++++ b/eeschema/tools/sch_actions.cpp
+@@ -131,6 +131,13 @@
+         .Tooltip( _( "Show/hide the remote symbol panel" ) )
+         .Icon( BITMAPS::library_browser ) );
+ 
++TOOL_ACTION SCH_ACTIONS::showSymbolLibraryPanel( TOOL_ACTION_ARGS()
++        .Name( "eeschema.SymbolLibrary.showPanel" )
++        .Scope( AS_GLOBAL )
++        .FriendlyName( _( "Symbols" ) )
++        .Tooltip( _( "Show/hide the symbol library panel" ) )
++        .Icon( BITMAPS::library_browser ) );
++
+ TOOL_ACTION SCH_ACTIONS::saveSheetAsDesignBlock( TOOL_ACTION_ARGS()
+         .Name( "eeschema.SchDesignBlockControl.saveSheetAsDesignBlock" )
+         .Scope( AS_GLOBAL )
+diff --git a/eeschema/tools/sch_editor_control.h b/eeschema/tools/sch_editor_control.h
+--- a/eeschema/tools/sch_editor_control.h
++++ b/eeschema/tools/sch_editor_control.h
+@@ -135,6 +135,7 @@
+     int ToggleProperties( const TOOL_EVENT& aEvent );
+     int ToggleLibraryTree( const TOOL_EVENT& aEvent );
+     int ToggleRemoteSymbolPanel( const TOOL_EVENT& aEvent );
++    int ToggleSymbolLibraryPanel( const TOOL_EVENT& aEvent );
+ 
+     int ToggleHiddenPins( const TOOL_EVENT& aEvent );
+     int ToggleHiddenFields( const TOOL_EVENT& aEvent );
+diff --git a/eeschema/tools/sch_editor_control.cpp b/eeschema/tools/sch_editor_control.cpp
+--- a/eeschema/tools/sch_editor_control.cpp
++++ b/eeschema/tools/sch_editor_control.cpp
+@@ -3133,6 +3133,13 @@
+ }
+ 
+ 
++int SCH_EDITOR_CONTROL::ToggleSymbolLibraryPanel( const TOOL_EVENT& aEvent )
++{
++    getEditFrame<SCH_EDIT_FRAME>()->ToggleSymbolLibraryPanel();
++    return 0;
++}
++
++
+ int SCH_EDITOR_CONTROL::ToggleHiddenPins( const TOOL_EVENT& aEvent )
+ {
+     EESCHEMA_SETTINGS* cfg = m_frame->eeconfig();
+@@ -3560,6 +3567,7 @@
+     Go( &SCH_EDITOR_CONTROL::ToggleLibraryTree,       SCH_ACTIONS::showDesignBlockPanel.MakeEvent() );
+     Go( &SCH_EDITOR_CONTROL::ToggleLibraryTree,       SCH_ACTIONS::showDesignBlockPanel.MakeEvent() );
+     Go( &SCH_EDITOR_CONTROL::ToggleRemoteSymbolPanel, SCH_ACTIONS::showRemoteSymbolPanel.MakeEvent() );
++    Go( &SCH_EDITOR_CONTROL::ToggleSymbolLibraryPanel, SCH_ACTIONS::showSymbolLibraryPanel.MakeEvent() );
+ 
+     Go( &SCH_EDITOR_CONTROL::ToggleHiddenPins,        SCH_ACTIONS::toggleHiddenPins.MakeEvent() );
+     Go( &SCH_EDITOR_CONTROL::ToggleHiddenFields,      SCH_ACTIONS::toggleHiddenFields.MakeEvent() );
+diff --git a/eeschema/menubar.cpp b/eeschema/menubar.cpp
+--- a/eeschema/menubar.cpp
++++ b/eeschema/menubar.cpp
+@@ -184,6 +184,7 @@
+         showHidePanels->Add( SCH_ACTIONS::showNetNavigator, ACTION_MENU::CHECK );
+ 
+     showHidePanels->Add( SCH_ACTIONS::showDesignBlockPanel, ACTION_MENU::CHECK, _( "Design Blocks" ) );
++    showHidePanels->Add( SCH_ACTIONS::showSymbolLibraryPanel, ACTION_MENU::CHECK, _( "Symbols" ) );
+     wxMenuItem* remoteSymbolItem = showHidePanels->Add( SCH_ACTIONS::showRemoteSymbolPanel, ACTION_MENU::CHECK, _( "Remote Symbols" ) );
+ 
+     if( m_remoteSymbolPane && !m_remoteSymbolPane->HasDataSources() )
