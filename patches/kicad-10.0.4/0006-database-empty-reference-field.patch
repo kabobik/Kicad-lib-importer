@@ -1,0 +1,21 @@
+diff --git a/eeschema/sch_io/database/sch_io_database.cpp b/eeschema/sch_io/database/sch_io_database.cpp
+--- a/eeschema/sch_io/database/sch_io_database.cpp
++++ b/eeschema/sch_io/database/sch_io_database.cpp
+@@ -601,6 +601,7 @@
+         fieldsMap[field->GetName()] = field;
+
+     static const wxString c_valueFieldName( wxS( "Value" ) );
++    static const wxString c_referenceFieldName( wxS( "Reference" ) );
+     static const wxString c_datasheetFieldName( wxS( "Datasheet" ) );
+     static const wxString c_footprintFieldName( wxS( "Footprint" ) );
+
+@@ -630,6 +631,9 @@
+
+         wxString value( strValue.c_str(), wxConvUTF8 );
+
++        if( mapping.name_wx == c_referenceFieldName && value.IsEmpty() )
++            continue;
++
+         if( mapping.name_wx == c_valueFieldName )
+         {
+             SCH_FIELD& field = symbol->GetValueField();

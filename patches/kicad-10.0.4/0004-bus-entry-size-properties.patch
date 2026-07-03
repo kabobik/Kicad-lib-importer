@@ -1,0 +1,34 @@
+diff --git a/eeschema/sch_bus_entry.cpp b/eeschema/sch_bus_entry.cpp
+index fc7d694..b3c3258 100644
+--- a/eeschema/sch_bus_entry.cpp
++++ b/eeschema/sch_bus_entry.cpp
+@@ -657,5 +657,13 @@ static struct SCH_BUS_ENTRY_DESC
+
+         propMgr.AddProperty( new PROPERTY<SCH_BUS_ENTRY_BASE, COLOR4D>( _HKI( "Color" ),
+                     &SCH_BUS_ENTRY_BASE::SetBusEntryColor, &SCH_BUS_ENTRY_BASE::GetBusEntryColor ) );
++
++        propMgr.AddProperty( new PROPERTY<SCH_BUS_ENTRY_BASE, int>( _HKI( "Size X" ),
++                    &SCH_BUS_ENTRY_BASE::SetSizeX, &SCH_BUS_ENTRY_BASE::GetSizeX,
++                    PROPERTY_DISPLAY::PT_SIZE ) );
++
++        propMgr.AddProperty( new PROPERTY<SCH_BUS_ENTRY_BASE, int>( _HKI( "Size Y" ),
++                    &SCH_BUS_ENTRY_BASE::SetSizeY, &SCH_BUS_ENTRY_BASE::GetSizeY,
++                    PROPERTY_DISPLAY::PT_SIZE ) );
+     }
+ } _SCH_BUS_ENTRY_DESC;
+diff --git a/eeschema/sch_bus_entry.h b/eeschema/sch_bus_entry.h
+index 6c22c18..df71e38 100644
+--- a/eeschema/sch_bus_entry.h
++++ b/eeschema/sch_bus_entry.h
+@@ -73,6 +73,11 @@ public:
+     VECTOR2I GetSize() const { return m_size; }
+     void SetSize( const VECTOR2I& aSize ) { m_size = aSize; }
+
++    int GetSizeX() const { return m_size.x; }
++    void SetSizeX( int aX ) { m_size.x = aX; }
++    int GetSizeY() const { return m_size.y; }
++    void SetSizeY( int aY ) { m_size.y = aY; }
++
+     // Base class getter unused; necessary for property to compile
+     int GetPenWidth() const override;
+     void SetPenWidth( int aWidth );

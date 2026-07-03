@@ -25,9 +25,19 @@
 
 ## kicad-10.0.4/
 
+Тематическая серия патчей. Скрипты применяют `*.patch`/`*.diff` в сортировке по имени;
+файл `series` дублирует ожидаемый порядок для ручной проверки.
+
 | Файл | Описание |
 |------|----------|
-| `local-patches-combined.diff` | Локальный слой проекта, проверенный на чистом архиве KiCad 10.0.4 |
+| `0001-gost-font-interline.patch` | Фикс расчёта interline для GOST/outline-шрифтов |
+| `0002-library-tree-group-by-column.patch` | Группировка symbol/footprint library tree по выбранной колонке |
+| `0003-smooth-drag-zoom.patch` | Фиксация курсора при drag-zoom |
+| `0004-bus-entry-size-properties.patch` | Поля Size X/Y в properties bus entry |
+| `0005-auto-bus-entry.patch` | Авто-конвертация 45° wire-сегмента в bus entry |
+| `0006-database-empty-reference-field.patch` | Не затирать Reference пустым значением из database library |
+| `0007-project-tree-extra-files.patch` | Показывать lib-table, `.kicad_dbl` и JSON-файлы в Project Tree |
+| `0008-schematic-page-background.patch` | Отдельный слой цвета фона листа схемы |
 
 Проверить совместимость:
 ```bash

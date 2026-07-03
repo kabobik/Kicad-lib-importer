@@ -1,7 +1,7 @@
 # KiCad Local Patches
 
 Коллекция патчей для KiCad с автоматической сборкой и установкой.  
-Патчи протестированы на **KiCad 9.0.7** и **9.0.8** (Debian/Ubuntu); для Arch Linux добавлен отдельный установщик.
+Патчи протестированы на **KiCad 9.0.7**, **9.0.8** и **10.0.4**; для Arch Linux добавлен отдельный установщик.
 
 ## Патчи
 
@@ -13,7 +13,7 @@
 | `0004-group-by-column` | 9.0.7 | ✅ работает | Группировка по колонке в дереве библиотек |
 | `0005-auto-bus-entry-posture-fix` | 9.0.7 | ✅ работает | Исправление posture для авто bus entry |
 | `local-patches-combined` | 9.0.8 | ✅ работает | Все патчи кроме altium-null-byte (уже в upstream) |
-| `local-patches-combined` | 10.0.4 | ✅ проверено | Локальный слой проекта, перебазированный на KiCad 10.0.4 |
+| `0001..0008` | 10.0.4 | ✅ проверено | Тематическая серия локальных патчей, включая отдельный фон листа |
 | `gost-font-multiline` | standalone | ✅ работает | Фикс integer truncation в `GetInterline()` для GOST-шрифтов |
 | `bus-entry-size-properties` | standalone | ✅ работает | Size X/Y в properties bus entry |
 
@@ -143,7 +143,7 @@ staged-сборкой из исходников. После установки `
 patches/
   kicad-9.0.7/          # серия патчей для 9.0.7 (5 штук)
   kicad-9.0.8/          # combined diff для 9.0.8
-  kicad-10.0.4/         # combined diff для 10.0.4
+  kicad-10.0.4/         # тематическая серия патчей для 10.0.4
   standalone/           # независимые патчи (gost, bus-entry)
 scripts/
   build_and_install.sh       # Debian/Ubuntu: патч → сборка → установка

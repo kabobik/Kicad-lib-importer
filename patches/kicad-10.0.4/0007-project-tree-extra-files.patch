@@ -1,0 +1,15 @@
+diff --git a/kicad/project_tree_pane.cpp b/kicad/project_tree_pane.cpp
+--- a/kicad/project_tree_pane.cpp
++++ b/kicad/project_tree_pane.cpp
+@@ -113,6 +113,11 @@ static const wxChar* s_allowedExtensionsToList[] =
+ {
+     wxT( "^.*\\.pro$" ),
+     wxT( "^.*\\.kicad_pro$" ),
++    wxT( "^.*fp-lib-table$" ),
++    wxT( "^.*sym-lib-table$" ),
++    wxT( "^.*design-block-lib-table$" ),
++    wxT( "^.*\\.kicad_dbl$" ),
++    wxT( "^.*\\.json$" ),
+     wxT( "^.*\\.pdf$" ),
+     wxT( "^.*\\.sch$" ),           // Legacy Eeschema files
+     wxT( "^.*\\.kicad_sch$" ),     // S-expr Eeschema files

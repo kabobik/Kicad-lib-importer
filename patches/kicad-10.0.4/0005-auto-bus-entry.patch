@@ -1,0 +1,210 @@
+diff --git a/eeschema/tools/sch_line_wire_bus_tool.cpp b/eeschema/tools/sch_line_wire_bus_tool.cpp
+index 1289c94..68eba34 100644
+--- a/eeschema/tools/sch_line_wire_bus_tool.cpp
++++ b/eeschema/tools/sch_line_wire_bus_tool.cpp
+@@ -1243,6 +1243,162 @@ void SCH_LINE_WIRE_BUS_TOOL::simplifyWireList()
+ }
+
+
++SCH_BUS_WIRE_ENTRY* SCH_LINE_WIRE_BUS_TOOL::tryConvertLastSegmentToBusEntry( SCH_SCREEN* aScreen )
++{
++    // Don't convert during bus unfold operations.
++    if( m_busUnfold.in_progress )
++        return nullptr;
++
++    if( m_wires.empty() )
++        return nullptr;
++
++    auto findDiagonalOnBus = [&]( SCH_LINE* aSeg, VECTOR2I& aBusEnd,
++                                  VECTOR2I& aWireEnd ) -> SCH_LINE*
++    {
++        if( !aSeg || aSeg->GetLayer() != LAYER_WIRE )
++            return nullptr;
++
++        VECTOR2I segStart = aSeg->GetStartPoint();
++        VECTOR2I segEnd = aSeg->GetEndPoint();
++        VECTOR2I delta = segEnd - segStart;
++
++        if( delta.x == 0 || delta.y == 0 )
++            return nullptr;
++
++        if( std::abs( delta.x ) != std::abs( delta.y ) )
++            return nullptr;
++
++        int absDx = std::abs( delta.x );
++
++        static constexpr int MIN_DIAGONAL_COMPONENT = 3500;    // ~0.5 mm / sqrt(2)
++        static constexpr int MAX_DIAGONAL_COMPONENT = 106066;  // ~15 mm / sqrt(2)
++
++        if( absDx < MIN_DIAGONAL_COMPONENT || absDx > MAX_DIAGONAL_COMPONENT )
++            return nullptr;
++
++        int accuracy = schIUScale.MilsToIU( 5 );
++
++        SCH_LINE* bus = aScreen->GetBus( segEnd, accuracy );
++
++        if( bus )
++        {
++            aBusEnd = bus->GetSeg().NearestPoint( segEnd );
++            aWireEnd = segStart;
++            return bus;
++        }
++
++        bus = aScreen->GetBus( segStart, accuracy );
++
++        if( bus )
++        {
++            aBusEnd = bus->GetSeg().NearestPoint( segStart );
++            aWireEnd = segEnd;
++            return bus;
++        }
++
++        return nullptr;
++    };
++
++    SCH_LINE* diagSeg = m_wires.back();
++    int       diagIdx = (int) m_wires.size() - 1;
++    VECTOR2I  busEnd, wireEnd;
++
++    SCH_LINE* bus = findDiagonalOnBus( diagSeg, busEnd, wireEnd );
++
++    if( !bus && m_wires.size() >= 2 )
++    {
++        SCH_LINE* prevSeg = m_wires[m_wires.size() - 2];
++
++        bus = findDiagonalOnBus( prevSeg, busEnd, wireEnd );
++
++        if( bus )
++        {
++            diagSeg = prevSeg;
++            diagIdx = (int) m_wires.size() - 2;
++        }
++    }
++
++    if( !bus && m_wires.size() >= 2 )
++    {
++        SCH_LINE* lastSeg = m_wires.back();
++        SCH_LINE* prevSeg = m_wires[m_wires.size() - 2];
++
++        if( lastSeg && !lastSeg->IsNull() && prevSeg && !prevSeg->IsNull()
++            && lastSeg->GetLayer() == LAYER_WIRE && prevSeg->GetLayer() == LAYER_WIRE )
++        {
++            VECTOR2I lastDelta = lastSeg->GetEndPoint() - lastSeg->GetStartPoint();
++            VECTOR2I prevDelta = prevSeg->GetEndPoint() - prevSeg->GetStartPoint();
++
++            bool lastIsStraight = ( lastDelta.x == 0 || lastDelta.y == 0 );
++            bool prevIs45 = ( prevDelta.x != 0 && prevDelta.y != 0
++                              && std::abs( prevDelta.x ) == std::abs( prevDelta.y ) );
++
++            if( lastIsStraight && prevIs45 )
++            {
++                int      accuracy = schIUScale.MilsToIU( 5 );
++                VECTOR2I lastEnd = lastSeg->GetEndPoint();
++                VECTOR2I lastStart = lastSeg->GetStartPoint();
++
++                SCH_LINE* busLine = aScreen->GetBus( lastEnd, accuracy );
++                VECTOR2I  busPoint = lastEnd;
++
++                if( !busLine )
++                {
++                    busLine = aScreen->GetBus( lastStart, accuracy );
++                    busPoint = lastStart;
++                }
++
++                if( busLine )
++                {
++                    int dxSign = ( prevDelta.x > 0 ) ? 1 : -1;
++                    int dySign = ( prevDelta.y > 0 ) ? 1 : -1;
++                    int diagLen = std::abs( prevDelta.x );
++
++                    VECTOR2I midPoint( busPoint.x - dxSign * diagLen,
++                                       busPoint.y - dySign * diagLen );
++
++                    prevSeg->SetEndPoint( midPoint );
++                    lastSeg->SetStartPoint( midPoint );
++                    lastSeg->SetEndPoint( busPoint );
++
++                    diagSeg = lastSeg;
++                    diagIdx = (int) m_wires.size() - 1;
++                    bus = findDiagonalOnBus( diagSeg, busEnd, wireEnd );
++                }
++            }
++        }
++    }
++
++    if( !bus )
++        return nullptr;
++
++    SCH_BUS_WIRE_ENTRY* busEntry = new SCH_BUS_WIRE_ENTRY( busEnd );
++    busEntry->SetSize( wireEnd - busEnd );
++    busEntry->SetParent( &m_frame->Schematic() );
++
++    m_wires.erase( m_wires.begin() + diagIdx );
++    delete diagSeg;
++
++    if( diagIdx > 0 && diagIdx <= (int) m_wires.size() )
++    {
++        m_wires[diagIdx - 1]->SetEndPoint( wireEnd );
++    }
++    else if( diagIdx == 0 && !m_wires.empty() )
++    {
++        m_wires[0]->SetStartPoint( wireEnd );
++    }
++
++    if( !m_wires.empty() && m_wires.back()->IsNull() )
++    {
++        SCH_LINE* nullSeg = m_wires.back();
++        m_wires.pop_back();
++        delete nullSeg;
++    }
++
++    return busEntry;
++}
++
++
+ void SCH_LINE_WIRE_BUS_TOOL::finishSegments( SCH_COMMIT& aCommit )
+ {
+     // Clear selection when done so that a new wire can be started.
+@@ -1255,6 +1411,9 @@ void SCH_LINE_WIRE_BUS_TOOL::finishSegments( SCH_COMMIT& aCommit )
+     // Remove segments backtracking over others
+     simplifyWireList();
+
++    // Try to auto-convert the last 45° wire segment into a bus entry
++    SCH_BUS_WIRE_ENTRY* autoBusEntry = tryConvertLastSegmentToBusEntry( screen );
++
+     // Collect the possible connection points for the new lines
+     std::vector<VECTOR2I> connections = screen->GetConnections();
+     std::vector<VECTOR2I> new_ends;
+@@ -1345,6 +1504,13 @@ void SCH_LINE_WIRE_BUS_TOOL::finishSegments( SCH_COMMIT& aCommit )
+     if( m_busUnfold.in_progress )
+         m_busUnfold = {};
+
++    if( autoBusEntry )
++    {
++        autoBusEntry->ClearFlags( IS_NEW );
++        m_frame->AddToScreen( autoBusEntry, screen );
++        aCommit.Added( autoBusEntry, screen );
++    }
++
+     for( SCH_ITEM* item : m_frame->GetScreen()->Items() )
+         item->ClearEditFlags();
+ }
+diff --git a/eeschema/tools/sch_line_wire_bus_tool.h b/eeschema/tools/sch_line_wire_bus_tool.h
+index 4681ce7..8fbd823 100644
+--- a/eeschema/tools/sch_line_wire_bus_tool.h
++++ b/eeschema/tools/sch_line_wire_bus_tool.h
+@@ -185,6 +185,14 @@ private:
+     void computeBreakPoint( const std::pair<SCH_LINE*, SCH_LINE*>& aSegments, VECTOR2I& aPosition,
+                             LINE_MODE mode, bool posture );
+
++    /**
++     * Try to convert the last 45° wire segment into a bus entry if it ends on a bus.
++     *
++     * @param aScreen The current schematic screen
++     * @return Pointer to created SCH_BUS_WIRE_ENTRY, or nullptr if conversion not applicable
++     */
++    SCH_BUS_WIRE_ENTRY* tryConvertLastSegmentToBusEntry( SCH_SCREEN* aScreen );
++
+ private:
+     bool                    m_inDrawingTool;   // Reentrancy guard
+

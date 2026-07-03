@@ -1,0 +1,18 @@
+diff --git a/common/font/outline_font.cpp b/common/font/outline_font.cpp
+index 803f2f3..780e898 100644
+--- a/common/font/outline_font.cpp
++++ b/common/font/outline_font.cpp
+@@ -153,8 +153,11 @@ double OUTLINE_FONT::GetInterline( double aGlyphHeight, const METRICS& aFontMetr
+ {
+     double glyphToFontHeight = 1.0;
+
+-    if( GetFace()->units_per_EM )
+-        glyphToFontHeight = GetFace()->height / GetFace()->units_per_EM;
++    if( GetFace() && GetFace()->units_per_EM > 0 && GetFace()->height > 0 )
++    {
++        glyphToFontHeight = static_cast<double>( GetFace()->height )
++                            / static_cast<double>( GetFace()->units_per_EM );
++    }
+
+     return aFontMetrics.GetInterline( aGlyphHeight * glyphToFontHeight );
+ }
