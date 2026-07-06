@@ -1,0 +1,162 @@
+diff --git a/include/lib_tree_model_adapter.h b/include/lib_tree_model_adapter.h
+--- a/include/lib_tree_model_adapter.h
++++ b/include/lib_tree_model_adapter.h
+@@ -445,6 +445,8 @@
+                                                size_t aGroupIndex );
+     wxString getGroupKey( const LIB_TREE_NODE& aNode, const wxString& aColumn ) const;
+     void assignIntrinsicRanksRecursive( LIB_TREE_NODE& aNode );
++    const LIB_TREE_NODE* getLibraryNode( const LIB_TREE_NODE& aNode ) const;
++    wxString getDisplayName( const LIB_TREE_NODE& aNode ) const;
+ 
+ private:
+     /**
+diff --git a/common/lib_tree_model_adapter.cpp b/common/lib_tree_model_adapter.cpp
+--- a/common/lib_tree_model_adapter.cpp
++++ b/common/lib_tree_model_adapter.cpp
+@@ -785,10 +785,10 @@
+     switch( aCol )
+     {
+     case NAME_COL:
++        valueStr = getDisplayName( *node );
++
+         if( node->m_Pinned )
+-            valueStr = GetPinningSymbol() + UnescapeString( node->m_Name );
+-        else
+-            valueStr = UnescapeString( node->m_Name );
++            valueStr = GetPinningSymbol() + valueStr;
+ 
+         break;
+ 
+@@ -1168,6 +1168,96 @@
+ }
+ 
+ 
++const LIB_TREE_NODE* LIB_TREE_MODEL_ADAPTER::getLibraryNode( const LIB_TREE_NODE& aNode ) const
++{
++    const LIB_TREE_NODE* node = &aNode;
++
++    while( node && node->m_Type != LIB_TREE_NODE::TYPE::LIBRARY )
++        node = node->m_Parent;
++
++    return node;
++}
++
++
++wxString LIB_TREE_MODEL_ADAPTER::getDisplayName( const LIB_TREE_NODE& aNode ) const
++{
++    wxString name = aNode.m_Name;
++
++    if( aNode.m_Type != LIB_TREE_NODE::TYPE::ITEM )
++        return UnescapeString( name );
++
++    std::vector<wxString> pathParts;
++
++    if( const LIB_TREE_NODE* lib = getLibraryNode( aNode ) )
++    {
++        wxString libName = lib->m_Name;
++        size_t   sep = libName.rfind( wxT( " - " ) );
++
++        if( sep != wxString::npos )
++            libName = libName.Mid( sep + 3 );
++
++        if( !libName.IsEmpty() && !libName.StartsWith( wxT( "-- " ) ) )
++            pathParts.push_back( libName );
++    }
++
++    std::vector<wxString> groupParts;
++
++    for( const LIB_TREE_NODE* parent = aNode.m_Parent; parent; parent = parent->m_Parent )
++    {
++        if( parent->m_Type == LIB_TREE_NODE::TYPE::GROUP )
++            groupParts.push_back( parent->m_Name );
++    }
++
++    std::reverse( groupParts.begin(), groupParts.end() );
++
++    for( const wxString& groupPart : groupParts )
++    {
++        if( !groupPart.IsEmpty()
++                && ( pathParts.empty() || pathParts.back() != groupPart ) )
++        {
++            pathParts.push_back( groupPart );
++        }
++    }
++
++    std::vector<wxString> candidates;
++
++    for( size_t start = 0; start < pathParts.size(); ++start )
++    {
++        wxString candidate;
++
++        for( size_t end = start; end < pathParts.size(); ++end )
++        {
++            if( !candidate.IsEmpty() )
++                candidate += wxT( "/" );
++
++            candidate += pathParts[end];
++
++            wxString prefix = candidate + wxT( "/" );
++
++            if( std::find( candidates.begin(), candidates.end(), prefix ) == candidates.end() )
++                candidates.push_back( prefix );
++        }
++    }
++
++    std::sort( candidates.begin(), candidates.end(),
++            []( const wxString& a, const wxString& b )
++            {
++                return a.Length() > b.Length();
++            } );
++
++    for( const wxString& prefix : candidates )
++    {
++        if( name.StartsWith( prefix ) && name.Length() > prefix.Length() )
++        {
++            name = name.Mid( prefix.Length() );
++            break;
++        }
++    }
++
++    return UnescapeString( name );
++}
++
++
+ void LIB_TREE_MODEL_ADAPTER::rebuildGroupNodes()
+ {
+     // Always start by flattening any existing grouping
+diff --git a/eeschema/symbol_tree_synchronizing_adapter.cpp b/eeschema/symbol_tree_synchronizing_adapter.cpp
+--- a/eeschema/symbol_tree_synchronizing_adapter.cpp
++++ b/eeschema/symbol_tree_synchronizing_adapter.cpp
+@@ -270,9 +270,9 @@
+             node->m_Name = m_frame->GetCurSymbol()->GetLibId().GetUniStringLibItemName();
+ 
+         if( node->m_Pinned )
+-            aVariant = GetPinningSymbol() + UnescapeString( node->m_Name );
++            aVariant = GetPinningSymbol() + getDisplayName( *node );
+         else
+-            aVariant = UnescapeString( node->m_Name );
++            aVariant = getDisplayName( *node );
+ 
+         // mark modified items with an asterisk
+         if( node->m_Type == LIB_TREE_NODE::TYPE::LIBRARY )
+@@ -282,7 +282,9 @@
+         }
+         else if( node->m_Type == LIB_TREE_NODE::TYPE::ITEM )
+         {
+-            if( m_libMgr->IsSymbolModified( node->m_Name, node->m_Parent->m_Name ) )
++            const LIB_TREE_NODE* lib = getLibraryNode( *node );
++
++            if( lib && m_libMgr->IsSymbolModified( node->m_Name, lib->m_Name ) )
+                 aVariant = aVariant.GetString() + " *";
+         }
+ 
+@@ -380,7 +382,8 @@
+ 
+     case LIB_TREE_NODE::TYPE::ITEM:
+         // mark modified part with bold font
+-        aAttr.SetBold( m_libMgr->IsSymbolModified( node->m_Name, node->m_Parent->m_Name ) );
++        if( const LIB_TREE_NODE* lib = getLibraryNode( *node ) )
++            aAttr.SetBold( m_libMgr->IsSymbolModified( node->m_Name, lib->m_Name ) );
+ 
+         // mark aliases with italic font
+         aAttr.SetItalic( !node->m_IsRoot );
