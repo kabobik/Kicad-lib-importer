@@ -73,14 +73,15 @@
 
 ## Фаза 4. Настраиваемая tree-column
 
-- [ ] Ввести параметр `m_treeDisplayColumn` или аналог.
-- [ ] Tree-column остается первой колонкой wxDataViewCtrl, но для `ITEM` может
+- [x] Ввести параметр `m_treeDisplayColumns` или аналог.
+- [x] Tree-column остается первой колонкой wxDataViewCtrl, но для `ITEM` может
       показывать не `m_Name`, а значение выбранного поля: `Description`,
       `Part Number`, `Item`, etc.
-- [ ] Для `LIBRARY` и `GROUP` tree-column продолжает показывать имя раздела или
+- [x] Для `LIBRARY` и `GROUP` tree-column продолжает показывать имя раздела или
       значение группы.
-- [ ] Добавить настройки/дефолт для символов: вероятно `Description`.
-- [ ] Проверить поведение modal chooser и symbol editor tree, чтобы изменение
+- [x] Добавить настройки/дефолт для символов: sidebar предпочитает `MPN`, затем
+      `Part Number`, иначе использует очищенный `Item`.
+- [x] Проверить поведение modal chooser и symbol editor tree, чтобы изменение
       не испортило их UX.
 
 ## Фаза 5. Очистка отображаемого имени компонента
@@ -124,13 +125,14 @@
 
 - [x] Собрать `cmake --build kicad-src-arch/build --target eeschema`.
 - [x] Проверить dry-run применения нового патча поверх `0001-0009`.
-- [ ] Разбить изменения на последовательные патчи:
+- [x] Разбить изменения на последовательные патчи:
       - [x] `0010-lib-tree-multigroup-model.patch` включает model,
         recursive groups и effective columns;
       - [x] `0011-lib-tree-grouping-ui.patch`;
       - [x] `0012-symbol-tree-display-cleanup.patch`;
       - [x] `0013-symbol-tree-compact-display.patch`;
-      - [x] `0014-lib-tree-expanded-state.patch`.
+      - [x] `0014-lib-tree-expanded-state.patch`;
+      - [x] `0015-lib-tree-display-columns.patch`.
 
 ## Блокеры и риски
 
@@ -147,6 +149,5 @@
   настройки этого окна.
 - **Поиск не должен деградировать.** Скрытие grouped columns из UI не должно
   удалять их из search terms.
-- **Настраиваемая tree-column пока не реализована.** После `0012` сырой
-  service-prefix скрывается в display value, но отдельного выбора поля для
-  первой tree-column еще нет.
+- **Настраиваемая tree-column реализована для sidebar.** Modal chooser и symbol
+  editor tree остаются на прежнем дефолте, чтобы не менять их UX.

@@ -1,0 +1,83 @@
+diff --git a/include/lib_tree_model_adapter.h b/include/lib_tree_model_adapter.h
+--- a/include/lib_tree_model_adapter.h
++++ b/include/lib_tree_model_adapter.h
+@@ -192,6 +192,8 @@
+ 
+     std::vector<wxString> GetShownColumns() const { return m_shownColumns; }
+     std::vector<wxString> GetEffectiveShownColumns() const;
++    void SetTreeDisplayColumns( const std::vector<wxString>& aColumns );
++    const std::vector<wxString>& GetTreeDisplayColumns() const { return m_treeDisplayColumns; }
+ 
+     std::vector<wxString> GetOpenLibs() const;
+     void OpenLibs( const std::vector<wxString>& aLibs );
+@@ -472,6 +474,7 @@
+     std::map<wxString, int>      m_colWidths;
+     std::vector<wxString>        m_shownColumns;   // Stored in display order
+     std::vector<wxString>        m_groupByColumns; ///< Column names for nested grouping.
++    std::vector<wxString>        m_treeDisplayColumns; ///< Preferred ITEM fields in tree column.
+     wxDataViewCtrl*              m_widget;
+     std::function<void()>        m_lazyLoadHandler;
+ 
+diff --git a/common/lib_tree_model_adapter.cpp b/common/lib_tree_model_adapter.cpp
+--- a/common/lib_tree_model_adapter.cpp
++++ b/common/lib_tree_model_adapter.cpp
+@@ -260,6 +260,26 @@
+ }
+ 
+ 
++void LIB_TREE_MODEL_ADAPTER::SetTreeDisplayColumns( const std::vector<wxString>& aColumns )
++{
++    std::vector<wxString> columns;
++
++    for( const wxString& column : aColumns )
++    {
++        if( column.IsEmpty() || column == _HKI( "Item" ) )
++            continue;
++
++        if( std::find( columns.begin(), columns.end(), column ) == columns.end() )
++            columns.push_back( column );
++    }
++
++    m_treeDisplayColumns = columns;
++
++    if( m_widget )
++        RefreshTree();
++}
++
++
+ void LIB_TREE_MODEL_ADAPTER::ShowUnits( bool aShow )
+ {
+     m_show_units = aShow;
+@@ -1186,6 +1206,21 @@
+     if( aNode.m_Type != LIB_TREE_NODE::TYPE::ITEM )
+         return UnescapeString( name );
+ 
++    for( const wxString& column : m_treeDisplayColumns )
++    {
++        wxString value;
++
++        if( column == wxT( "Description" ) )
++            value = aNode.m_Desc;
++        else if( aNode.m_Fields.count( column ) )
++            value = aNode.m_Fields.at( column );
++
++        value.Replace( wxS( "\n" ), wxS( " " ) );
++
++        if( !value.IsEmpty() )
++            return UnescapeString( value );
++    }
++
+     std::vector<wxString> pathParts;
+ 
+     if( const LIB_TREE_NODE* lib = getLibraryNode( aNode ) )
+diff --git a/eeschema/widgets/sch_symbol_library_pane.cpp b/eeschema/widgets/sch_symbol_library_pane.cpp
+--- a/eeschema/widgets/sch_symbol_library_pane.cpp
++++ b/eeschema/widgets/sch_symbol_library_pane.cpp
+@@ -70,6 +70,7 @@
+     SYMBOL_TREE_MODEL_ADAPTER* adapter = static_cast<SYMBOL_TREE_MODEL_ADAPTER*>( m_adapter.get() );
+ 
+     adapter->AddLibraries( m_frame );
++    adapter->SetTreeDisplayColumns( { wxT( "MPN" ), wxT( "Part Number" ) } );
+ 
+     wxBoxSizer* sizer = new wxBoxSizer( wxVERTICAL );
+ 
