@@ -114,11 +114,11 @@
 
 ## Фаза 7. Compact mode для боковой панели
 
-- [ ] Добавить флаг `LIB_TREE::COMPACT` или отдельный style/options объект.
-- [ ] Уменьшить row height и вертикальные отступы.
-- [ ] Уменьшить padding search/chips/header.
-- [ ] Включить compact mode в `SCH_SYMBOL_LIBRARY_PANE`.
-- [ ] Не менять дефолтный modal chooser без отдельного решения.
+- [x] Добавить флаг `LIB_TREE::COMPACT` или отдельный style/options объект.
+- [x] Уменьшить row height и вертикальные отступы.
+- [x] Уменьшить padding search/chips/header.
+- [x] Включить compact mode в `SCH_SYMBOL_LIBRARY_PANE`.
+- [x] Не менять дефолтный modal chooser без отдельного решения.
 
 ## Фаза 8. Проверка и разбиение на патчи
 
@@ -129,7 +129,7 @@
         recursive groups и effective columns;
       - [x] `0011-lib-tree-grouping-ui.patch`;
       - [x] `0012-symbol-tree-display-cleanup.patch`;
-      - `0013-symbol-tree-compact-display.patch`;
+      - [x] `0013-symbol-tree-compact-display.patch`;
       - `0014-symbol-sidebar-details-polish.patch`.
 
 ## Блокеры и риски

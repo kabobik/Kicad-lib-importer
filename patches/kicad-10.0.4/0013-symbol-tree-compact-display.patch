@@ -1,0 +1,155 @@
+diff --git a/include/widgets/lib_tree.h b/include/widgets/lib_tree.h
+--- a/include/widgets/lib_tree.h
++++ b/include/widgets/lib_tree.h
+@@ -60,7 +60,8 @@
+         DETAILS     = 0x04,
+         ALL_WIDGETS = 0x0F,
+         MULTISELECT = 0x10,
+-        NO_HOVER_PREVIEW = 0x20
++        NO_HOVER_PREVIEW = 0x20,
++        COMPACT = 0x40
+     };
+ 
+     /**
+@@ -288,6 +289,7 @@
+     wxPopupWindow*     m_previewWindow;
+     bool               m_previewDisabled;
+     bool               m_hoverPreviewEnabled;
++    bool               m_compactMode;
+ };
+ 
+ /// Custom event sent when an item is selected in the list.
+diff --git a/common/widgets/lib_tree.cpp b/common/widgets/lib_tree.cpp
+--- a/common/widgets/lib_tree.cpp
++++ b/common/widgets/lib_tree.cpp
+@@ -70,9 +70,12 @@
+         m_skipNextRightClick( false ),
+         m_previewWindow( nullptr ),
+         m_previewDisabled( aFlags & NO_HOVER_PREVIEW ),
+-        m_hoverPreviewEnabled( !( aFlags & NO_HOVER_PREVIEW ) )
++        m_hoverPreviewEnabled( !( aFlags & NO_HOVER_PREVIEW ) ),
++        m_compactMode( aFlags & COMPACT )
+ {
+     wxBoxSizer* sizer = new wxBoxSizer( wxVERTICAL );
++    int         controlGap = m_compactMode ? 2 : 4;
++    int         sectionGap = m_compactMode ? 2 : 5;
+ 
+     m_hoverTimer.SetOwner( this );
+     Bind( wxEVT_TIMER, &LIB_TREE::onHoverTimer, this, m_hoverTimer.GetId() );
+@@ -88,10 +91,10 @@
+ 
+         m_debounceTimer = new wxTimer( this );
+ 
+-        search_sizer->Add( m_query_ctrl, 1, wxALIGN_CENTER_VERTICAL|wxRIGHT, 4 );
++        search_sizer->Add( m_query_ctrl, 1, wxALIGN_CENTER_VERTICAL|wxRIGHT, controlGap );
+ 
+         wxStaticLine* separator = new wxStaticLine( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLI_VERTICAL );
+-        search_sizer->Add( separator, 0, wxEXPAND|wxTOP|wxBOTTOM, 3 );
++        search_sizer->Add( separator, 0, wxEXPAND|wxTOP|wxBOTTOM, m_compactMode ? 2 : 3 );
+ 
+         m_sort_ctrl = new BITMAP_BUTTON( this, wxID_ANY, wxNullBitmap, wxDefaultPosition,
+                                          wxDefaultSize, wxBU_AUTODRAW|0 );
+@@ -137,9 +140,9 @@
+                 } );
+ 
+         m_sort_ctrl->Bind( wxEVT_CHAR_HOOK, &LIB_TREE::onTreeCharHook, this );
+-        search_sizer->Add( m_sort_ctrl, 0, wxALIGN_CENTER_VERTICAL, 5 );
++        search_sizer->Add( m_sort_ctrl, 0, wxALIGN_CENTER_VERTICAL, sectionGap );
+ 
+-        sizer->Add( search_sizer, 0, wxEXPAND, 5 );
++        sizer->Add( search_sizer, 0, wxEXPAND, sectionGap );
+ 
+         m_query_ctrl->Bind( wxEVT_TEXT, &LIB_TREE::onQueryText, this );
+ 
+@@ -171,22 +174,25 @@
+     if( aFlags & FILTERS )
+     {
+         m_filtersSizer = new wxBoxSizer( wxVERTICAL );
+-        sizer->Add( m_filtersSizer, 0, wxEXPAND | wxLEFT, 4 );
++        sizer->Add( m_filtersSizer, 0, wxEXPAND | wxLEFT, controlGap );
+     }
+ 
+     m_groupingPanel = new wxPanel( this, wxID_ANY );
+     m_groupingSizer = new wxWrapSizer( wxHORIZONTAL );
+     m_groupingPanel->SetSizer( m_groupingSizer );
+-    sizer->Add( m_groupingPanel, 0, wxEXPAND | wxTOP, 2 );
++    sizer->Add( m_groupingPanel, 0, wxEXPAND | wxTOP, m_compactMode ? 1 : 2 );
+ 
+     // Tree control
+     int dvFlags = ( aFlags & MULTISELECT ) ? wxDV_MULTIPLE : wxDV_SINGLE;
+     m_tree_ctrl = new WX_DATAVIEWCTRL( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, dvFlags );
+     m_adapter->AttachTo( m_tree_ctrl );
+ 
++    if( m_compactMode )
++        m_tree_ctrl->SetIndent( 14 );
++
+ #ifdef __WXGTK__
+     // The GTK renderer seems to calculate row height incorrectly sometimes; but can be overridden
+-    int rowHeight = FromDIP( 6 ) + GetTextExtent( wxS( "pdI" ) ).y;
++    int rowHeight = FromDIP( m_compactMode ? 2 : 6 ) + GetTextExtent( wxS( "pdI" ) ).y;
+     m_tree_ctrl->SetRowHeight( rowHeight );
+ #endif
+ 
+@@ -202,7 +208,7 @@
+             m_details_ctrl = new HTML_WINDOW( this, wxID_ANY, wxDefaultPosition,
+                                               wxSize( html_size.x, html_size.y ) );
+ 
+-            sizer->Add( m_details_ctrl, 2, wxTOP | wxEXPAND, 5 );
++            sizer->Add( m_details_ctrl, 2, wxTOP | wxEXPAND, sectionGap );
+         }
+         else
+         {
+@@ -1176,8 +1182,10 @@
+         return;
+     }
+ 
++    int gap = FromDIP( m_compactMode ? 2 : 4 );
++
+     wxStaticText* label = new wxStaticText( m_groupingPanel, wxID_ANY, _( "Grouped by:" ) );
+-    m_groupingSizer->Add( label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT | wxBOTTOM, FromDIP( 4 ) );
++    m_groupingSizer->Add( label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT | wxBOTTOM, gap );
+ 
+     for( const wxString& column : groupColumns )
+     {
+@@ -1193,8 +1201,7 @@
+                     removeGroupingColumn( column );
+                 } );
+ 
+-        m_groupingSizer->Add( button, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT | wxBOTTOM,
+-                              FromDIP( 4 ) );
++        m_groupingSizer->Add( button, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT | wxBOTTOM, gap );
+     }
+ 
+     m_groupingPanel->Show();
+diff --git a/eeschema/widgets/sch_symbol_library_pane.cpp b/eeschema/widgets/sch_symbol_library_pane.cpp
+--- a/eeschema/widgets/sch_symbol_library_pane.cpp
++++ b/eeschema/widgets/sch_symbol_library_pane.cpp
+@@ -75,7 +75,8 @@
+ 
+     m_details = new HTML_WINDOW( this, wxID_ANY, wxDefaultPosition, wxDefaultSize );
+     m_tree = new LIB_TREE( this, wxT( "symbols" ), m_adapter,
+-                           LIB_TREE::SEARCH | LIB_TREE::DETAILS | LIB_TREE::NO_HOVER_PREVIEW,
++                           LIB_TREE::SEARCH | LIB_TREE::DETAILS | LIB_TREE::NO_HOVER_PREVIEW
++                                   | LIB_TREE::COMPACT,
+                            m_details );
+ 
+     EDA_DRAW_PANEL_GAL::GAL_TYPE backend = EDA_DRAW_PANEL_GAL::GAL_TYPE::GAL_TYPE_OPENGL;
+@@ -100,11 +101,13 @@
+     m_symbolPreview->SetMinSize( wxSize( -1, FromDIP( 140 ) ) );
+     m_fpPreview->SetMinSize( wxSize( -1, FromDIP( 140 ) ) );
+ 
+-    sizer->Add( m_tree, 4, wxEXPAND | wxALL, 4 );
+-    sizer->Add( m_details, 2, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 4 );
+-    sizer->Add( m_symbolPreview, 3, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 4 );
+-    sizer->Add( m_fpSelect, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 4 );
+-    sizer->Add( m_fpPreview, 3, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 4 );
++    int paneGap = FromDIP( 2 );
++
++    sizer->Add( m_tree, 4, wxEXPAND | wxALL, paneGap );
++    sizer->Add( m_details, 2, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, paneGap );
++    sizer->Add( m_symbolPreview, 3, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, paneGap );
++    sizer->Add( m_fpSelect, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, paneGap );
++    sizer->Add( m_fpPreview, 3, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, paneGap );
+ 
+     SetSizer( sizer );
+     Layout();
