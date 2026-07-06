@@ -1,0 +1,736 @@
+diff --git a/include/settings/app_settings.h b/include/settings/app_settings.h
+--- a/include/settings/app_settings.h
++++ b/include/settings/app_settings.h
+@@ -158,7 +158,7 @@
+         std::vector<wxString> columns;         ///< Ordered list of visible columns in the tree.
+         std::map<wxString, int> column_widths; ///< Column widths, keyed by header name.
+         std::vector<wxString>   open_libs;     ///< list of libraries the user has open in the tree.
+-        wxString                group_by_column; ///< Column name used for grouping (empty = no grouping).
++        std::vector<wxString>   group_by_columns; ///< Column names used for nested grouping.
+     };
+ 
+     struct PANEL_DESIGN_BLOCK_CHOOSER
+diff --git a/common/settings/app_settings.cpp b/common/settings/app_settings.cpp
+--- a/common/settings/app_settings.cpp
++++ b/common/settings/app_settings.cpp
+@@ -169,8 +169,9 @@
+     m_params.emplace_back(
+             new PARAM_LIST<wxString>( "lib_tree.open_libs", &m_LibTree.open_libs, {} ) );
+ 
+-    m_params.emplace_back( new PARAM<wxString>( "lib_tree.group_by_column",
+-            &m_LibTree.group_by_column, wxT( "" ) ) );
++    m_params.emplace_back(
++            new PARAM_LIST<wxString>( "lib_tree.group_by_columns",
++                                      &m_LibTree.group_by_columns, {} ) );
+ 
+     m_params.emplace_back( new PARAM<bool>( "printing.background",
+             &m_Printing.background, false ) );
+diff --git a/include/lib_tree_model.h b/include/lib_tree_model.h
+--- a/include/lib_tree_model.h
++++ b/include/lib_tree_model.h
+@@ -247,10 +247,12 @@
+     /**
+      * Construct a group node.
+      *
+-     * @param aParent    parent node (should be a LIBRARY node)
+-     * @param aGroupName display name of the group
++     * @param aParent      parent node (library or another group)
++     * @param aGroupColumn column name used to create this group
++     * @param aGroupValue  display value of the group
+      */
+-    LIB_TREE_NODE_GROUP( LIB_TREE_NODE* aParent, const wxString& aGroupName );
++    LIB_TREE_NODE_GROUP( LIB_TREE_NODE* aParent, const wxString& aGroupColumn,
++                         const wxString& aGroupValue );
+ 
+     /**
+      * Transfer an existing child node into this group (takes ownership).
+@@ -259,6 +261,9 @@
+ 
+     void UpdateScore( const std::vector<std::unique_ptr<EDA_COMBINED_MATCHER>>& aMatchers,
+                       std::function<bool( LIB_TREE_NODE& aNode )>* aFilter ) override;
++
++    wxString    m_GroupColumn;
++    wxString    m_GroupValue;
+ };
+ 
+ 
+diff --git a/common/lib_tree_model.cpp b/common/lib_tree_model.cpp
+--- a/common/lib_tree_model.cpp
++++ b/common/lib_tree_model.cpp
+@@ -275,13 +275,16 @@
+ }
+ 
+ 
+-LIB_TREE_NODE_GROUP::LIB_TREE_NODE_GROUP( LIB_TREE_NODE* aParent, const wxString& aGroupName )
++LIB_TREE_NODE_GROUP::LIB_TREE_NODE_GROUP( LIB_TREE_NODE* aParent, const wxString& aGroupColumn,
++                                          const wxString& aGroupValue )
+ {
+     m_Type = TYPE::GROUP;
+     m_Parent = aParent;
+-    m_Name = aGroupName;
++    m_Name = aGroupValue;
+     m_Desc = wxEmptyString;
+     m_LibId = aParent->m_LibId;
++    m_GroupColumn = aGroupColumn;
++    m_GroupValue = aGroupValue;
+ }
+ 
+ 
+@@ -410,4 +413,3 @@
+     for( std::unique_ptr<LIB_TREE_NODE>& child: m_Children )
+         child->UpdateScore( aMatchers, aFilter );
+ }
+-
+diff --git a/include/lib_tree_model_adapter.h b/include/lib_tree_model_adapter.h
+--- a/include/lib_tree_model_adapter.h
++++ b/include/lib_tree_model_adapter.h
+@@ -191,6 +191,7 @@
+     std::vector<wxString> GetAvailableColumns() const { return m_availableColumns; }
+ 
+     std::vector<wxString> GetShownColumns() const { return m_shownColumns; }
++    std::vector<wxString> GetEffectiveShownColumns() const;
+ 
+     std::vector<wxString> GetOpenLibs() const;
+     void OpenLibs( const std::vector<wxString>& aLibs );
+@@ -202,11 +203,21 @@
+     }
+ 
+     /**
+-     * Set/get the column used for grouping items within each library.
+-     * An empty string means no grouping (flat display).
++     * Set/get the columns used for nested grouping items within each library.
++     * An empty vector means no grouping (flat display).
++     */
++    void SetGroupColumns( const std::vector<wxString>& aColumns );
++    void AddGroupColumn( const wxString& aColumn );
++    void RemoveGroupColumn( const wxString& aColumn );
++    void ClearGroupColumns();
++    const std::vector<wxString>& GetGroupColumns() const { return m_groupByColumns; }
++    bool IsGroupColumn( const wxString& aColumn ) const;
++
++    /**
++     * Single-column compatibility helpers.
+      */
+     void SetGroupColumn( const wxString& aColumn );
+-    wxString GetGroupColumn() const { return m_groupByColumn; }
++    wxString GetGroupColumn() const;
+ 
+     /**
+      * Return the internal column name for a given display column index.
+@@ -225,10 +236,7 @@
+      */
+     void AssignIntrinsicRanks()
+     {
+-        m_tree.AssignIntrinsicRanks( m_shownColumns );
+-
+-        for( const std::unique_ptr<LIB_TREE_NODE>& child : m_tree.m_Children )
+-            child->AssignIntrinsicRanks( m_shownColumns );
++        assignIntrinsicRanksRecursive( m_tree );
+     }
+ 
+     /**
+@@ -423,7 +431,7 @@
+     void resortTree();
+ 
+     /**
+-     * Rebuild the GROUP nodes inside each LIBRARY according to m_groupByColumn.
++     * Rebuild the GROUP nodes inside each LIBRARY according to m_groupByColumns.
+      */
+     void rebuildGroupNodes();
+ 
+@@ -431,6 +439,12 @@
+      * Remove all GROUP nodes, moving their ITEM children back to the parent LIBRARY.
+      */
+     void flattenGroups();
++    void flattenGroupChildren( LIB_TREE_NODE& aNode );
++    LIB_TREE_NODE::PTR_VECTOR buildGroupLevel( LIB_TREE_NODE* aParent,
++                                               LIB_TREE_NODE::PTR_VECTOR&& aChildren,
++                                               size_t aGroupIndex );
++    wxString getGroupKey( const LIB_TREE_NODE& aNode, const wxString& aColumn ) const;
++    void assignIntrinsicRanksRecursive( LIB_TREE_NODE& aNode );
+ 
+ private:
+     /**
+@@ -455,7 +469,7 @@
+     std::vector<wxString>        m_availableColumns;
+     std::map<wxString, int>      m_colWidths;
+     std::vector<wxString>        m_shownColumns;   // Stored in display order
+-    wxString                     m_groupByColumn;  ///< Column name for grouping; empty = flat.
++    std::vector<wxString>        m_groupByColumns; ///< Column names for nested grouping.
+     wxDataViewCtrl*              m_widget;
+     std::function<void()>        m_lazyLoadHandler;
+ 
+diff --git a/common/lib_tree_model_adapter.cpp b/common/lib_tree_model_adapter.cpp
+--- a/common/lib_tree_model_adapter.cpp
++++ b/common/lib_tree_model_adapter.cpp
+@@ -36,6 +36,7 @@
+ #include <wx/log.h>
+ #include <string_utils.h>
+ 
++#include <algorithm>
+ 
+ static const int kDataViewIndent = 20;
+ 
+@@ -179,7 +180,7 @@
+ 
+     m_shownColumns = m_cfg.columns;
+ 
+-    m_groupByColumn = m_cfg.group_by_column;
++    m_groupByColumns = m_cfg.group_by_columns;
+ 
+     if( m_shownColumns.empty() )
+         m_shownColumns = {  _HKI( "Item" ), _HKI( "Description" ) };
+@@ -226,20 +227,39 @@
+     if( m_widget )
+     {
+         m_cfg.columns = GetShownColumns();
+-        m_cfg.column_widths.clear();
+ 
+         for( const std::pair<const wxString, wxDataViewColumn*>& pair : m_colNameMap )
+         {
+             if( pair.second )
+-                m_cfg.column_widths[pair.first] = pair.second->GetWidth();
++                m_colWidths[pair.first] = pair.second->GetWidth();
+         }
+ 
++        m_cfg.column_widths = m_colWidths;
+         m_cfg.open_libs = GetOpenLibs();
+-        m_cfg.group_by_column = m_groupByColumn;
++        m_cfg.group_by_columns = m_groupByColumns;
+     }
+ }
+ 
+ 
++std::vector<wxString> LIB_TREE_MODEL_ADAPTER::GetEffectiveShownColumns() const
++{
++    std::vector<wxString> columns;
++
++    for( const wxString& column : m_shownColumns )
++    {
++        if( column != _HKI( "Item" ) && IsGroupColumn( column ) )
++            continue;
++
++        columns.push_back( column );
++    }
++
++    if( columns.empty() || columns[0] != _HKI( "Item" ) )
++        columns.insert( columns.begin(), _HKI( "Item" ) );
++
++    return columns;
++}
++
++
+ void LIB_TREE_MODEL_ADAPTER::ShowUnits( bool aShow )
+ {
+     m_show_units = aShow;
+@@ -388,7 +408,7 @@
+     aDataViewCtrl->SetIndent( kDataViewIndent );
+ 
+     // Apply any saved grouping before associating the model with the control
+-    if( !m_groupByColumn.IsEmpty() )
++    if( !m_groupByColumns.empty() )
+         rebuildGroupNodes();
+ 
+     aDataViewCtrl->AssociateModel( this );
+@@ -412,7 +432,7 @@
+ 
+ void LIB_TREE_MODEL_ADAPTER::createMissingColumns()
+ {
+-    for( const wxString& colName : m_shownColumns )
++    for( const wxString& colName : GetEffectiveShownColumns() )
+     {
+         if( !m_colNameMap.count( colName ) )
+             doAddColumn( colName, colName == wxT( "Description" ) );
+@@ -554,8 +574,17 @@
+ {
+     int n = 0;
+ 
+-    for( const std::unique_ptr<LIB_TREE_NODE>& lib: m_tree.m_Children )
+-        n += lib->m_Children.size();
++    std::function<void( const LIB_TREE_NODE& )> countItems =
++            [&]( const LIB_TREE_NODE& aNode )
++            {
++                if( aNode.m_Type == LIB_TREE_NODE::TYPE::ITEM )
++                    ++n;
++
++                for( const std::unique_ptr<LIB_TREE_NODE>& child : aNode.m_Children )
++                    countItems( *child );
++            };
++
++    countItems( m_tree );
+ 
+     return n;
+ }
+@@ -572,22 +601,26 @@
+         if( aLibId.GetLibItemName() == "" )
+             return ToItem( lib.get() );
+ 
+-        for( std::unique_ptr<LIB_TREE_NODE>& child: lib->m_Children )
+-        {
+-            if( child->m_Type == LIB_TREE_NODE::TYPE::GROUP )
+-            {
+-                for( std::unique_ptr<LIB_TREE_NODE>& item: child->m_Children )
++        std::function<LIB_TREE_NODE*( LIB_TREE_NODE& )> findItem =
++                [&]( LIB_TREE_NODE& aNode ) -> LIB_TREE_NODE*
+                 {
+-                    if( item->m_Name == aLibId.GetLibItemName().wx_str() )
+-                        return ToItem( item.get() );
+-                }
+-            }
+-            else
+-            {
+-                if( child->m_Name == aLibId.GetLibItemName().wx_str() )
+-                    return ToItem( child.get() );
+-            }
+-        }
++                    if( aNode.m_Type == LIB_TREE_NODE::TYPE::ITEM
++                            && aNode.m_Name == aLibId.GetLibItemName().wx_str() )
++                    {
++                        return &aNode;
++                    }
++
++                    for( std::unique_ptr<LIB_TREE_NODE>& child : aNode.m_Children )
++                    {
++                        if( LIB_TREE_NODE* found = findItem( *child ) )
++                            return found;
++                    }
++
++                    return nullptr;
++                };
++
++        if( LIB_TREE_NODE* found = findItem( *lib ) )
++            return ToItem( found );
+ 
+         break;  // could not find the part in the requested library
+     }
+@@ -648,7 +681,8 @@
+     }
+ 
+     int remainingWidth = m_widget->GetSize().x - totalWidth;
+-    header = m_columns[idx]->GetTitle();
++    wxASSERT( m_colIdxMap.count( idx ) );
++    header = m_colIdxMap[idx];
+ 
+     m_columns[idx]->SetWidth( std::max( m_colWidths[header], remainingWidth ) );
+ }
+@@ -921,16 +955,36 @@
+ }
+ 
+ 
+-void LIB_TREE_MODEL_ADAPTER::SetGroupColumn( const wxString& aColumn )
++void LIB_TREE_MODEL_ADAPTER::SetGroupColumns( const std::vector<wxString>& aColumns )
+ {
+-    if( m_groupByColumn == aColumn )
++    std::vector<wxString> columns;
++
++    for( const wxString& column : aColumns )
++    {
++        if( column.IsEmpty() || column == _HKI( "Item" ) )
++            continue;
++
++        if( std::find( columns.begin(), columns.end(), column ) == columns.end() )
++            columns.push_back( column );
++    }
++
++    if( m_groupByColumns == columns )
+         return;
+ 
+-    m_groupByColumn = aColumn;
+-    rebuildGroupNodes();
++    m_groupByColumns = columns;
++
++    if( !m_widget )
++    {
++        rebuildGroupNodes();
++        m_tree.SortNodes( m_sort_mode == BEST_MATCH );
++        return;
++    }
++
++    recreateColumns();
+ 
+     Freeze();
+     BeforeReset();
++    rebuildGroupNodes();
+     m_tree.SortNodes( m_sort_mode == BEST_MATCH );
+     AfterReset();
+     Thaw();
+@@ -944,6 +998,54 @@
+ }
+ 
+ 
++void LIB_TREE_MODEL_ADAPTER::AddGroupColumn( const wxString& aColumn )
++{
++    if( aColumn.IsEmpty() || aColumn == _HKI( "Item" ) || IsGroupColumn( aColumn ) )
++        return;
++
++    std::vector<wxString> columns = m_groupByColumns;
++    columns.push_back( aColumn );
++    SetGroupColumns( columns );
++}
++
++
++void LIB_TREE_MODEL_ADAPTER::RemoveGroupColumn( const wxString& aColumn )
++{
++    std::vector<wxString> columns = m_groupByColumns;
++
++    std::erase( columns, aColumn );
++    SetGroupColumns( columns );
++}
++
++
++void LIB_TREE_MODEL_ADAPTER::ClearGroupColumns()
++{
++    SetGroupColumns( {} );
++}
++
++
++bool LIB_TREE_MODEL_ADAPTER::IsGroupColumn( const wxString& aColumn ) const
++{
++    return std::find( m_groupByColumns.begin(), m_groupByColumns.end(), aColumn )
++            != m_groupByColumns.end();
++}
++
++
++void LIB_TREE_MODEL_ADAPTER::SetGroupColumn( const wxString& aColumn )
++{
++    if( aColumn.IsEmpty() )
++        ClearGroupColumns();
++    else
++        SetGroupColumns( { aColumn } );
++}
++
++
++wxString LIB_TREE_MODEL_ADAPTER::GetGroupColumn() const
++{
++    return m_groupByColumns.empty() ? wxString() : m_groupByColumns.front();
++}
++
++
+ bool LIB_TREE_MODEL_ADAPTER::GetColumnName( int aColIdx, wxString& aName ) const
+ {
+     auto it = m_colIdxMap.find( (unsigned) aColIdx );
+@@ -965,99 +1067,121 @@
+         if( lib->m_Type != LIB_TREE_NODE::TYPE::LIBRARY )
+             continue;
+ 
+-        LIB_TREE_NODE::PTR_VECTOR newChildren;
++        flattenGroupChildren( *lib );
++    }
++}
++
++
++void LIB_TREE_MODEL_ADAPTER::flattenGroupChildren( LIB_TREE_NODE& aNode )
++{
++    LIB_TREE_NODE::PTR_VECTOR newChildren;
+ 
+-        for( auto& child : lib->m_Children )
++    for( std::unique_ptr<LIB_TREE_NODE>& child : aNode.m_Children )
++    {
++        if( child->m_Type == LIB_TREE_NODE::TYPE::GROUP )
+         {
+-            if( child->m_Type == LIB_TREE_NODE::TYPE::GROUP )
+-            {
+-                // Move items from GROUP back into LIBRARY
+-                for( auto& item : child->m_Children )
+-                {
+-                    item->m_Parent = lib.get();
+-                    newChildren.push_back( std::move( item ) );
+-                }
+-            }
+-            else
++            flattenGroupChildren( *child );
++
++            for( std::unique_ptr<LIB_TREE_NODE>& groupChild : child->m_Children )
+             {
+-                newChildren.push_back( std::move( child ) );
++                groupChild->m_Parent = &aNode;
++                newChildren.push_back( std::move( groupChild ) );
+             }
+         }
+-
+-        lib->m_Children = std::move( newChildren );
++        else
++        {
++            child->m_Parent = &aNode;
++            newChildren.push_back( std::move( child ) );
++        }
+     }
++
++    aNode.m_Children = std::move( newChildren );
+ }
+ 
+ 
+-void LIB_TREE_MODEL_ADAPTER::rebuildGroupNodes()
++wxString LIB_TREE_MODEL_ADAPTER::getGroupKey( const LIB_TREE_NODE& aNode,
++                                              const wxString& aColumn ) const
+ {
+-    // Always start by flattening any existing grouping
+-    flattenGroups();
++    wxString key;
+ 
+-    if( m_groupByColumn.IsEmpty() )
+-        return;
++    if( aColumn == wxT( "Description" ) )
++        key = aNode.m_Desc;
++    else if( aNode.m_Fields.count( aColumn ) )
++        key = aNode.m_Fields.at( aColumn );
+ 
+-    for( std::unique_ptr<LIB_TREE_NODE>& lib : m_tree.m_Children )
++    if( key.IsEmpty() )
++        key = _( "(ungrouped)" );
++
++    return key;
++}
++
++
++LIB_TREE_NODE::PTR_VECTOR LIB_TREE_MODEL_ADAPTER::buildGroupLevel(
++        LIB_TREE_NODE* aParent, LIB_TREE_NODE::PTR_VECTOR&& aChildren, size_t aGroupIndex )
++{
++    if( aGroupIndex >= m_groupByColumns.size() )
+     {
+-        if( lib->m_Type != LIB_TREE_NODE::TYPE::LIBRARY )
+-            continue;
++        for( std::unique_ptr<LIB_TREE_NODE>& child : aChildren )
++            child->m_Parent = aParent;
+ 
+-        // Build a map: groupKey -> list of indices
+-        std::map<wxString, std::vector<size_t>> groupMap;
++        LIB_TREE_NODE::PTR_VECTOR children = std::move( aChildren );
++        return children;
++    }
+ 
+-        for( size_t i = 0; i < lib->m_Children.size(); ++i )
+-        {
+-            LIB_TREE_NODE* item = lib->m_Children[i].get();
++    const wxString& groupColumn = m_groupByColumns[aGroupIndex];
+ 
+-            if( item->m_Type != LIB_TREE_NODE::TYPE::ITEM )
+-                continue;
++    std::map<wxString, LIB_TREE_NODE::PTR_VECTOR> groupMap;
++    LIB_TREE_NODE::PTR_VECTOR                     passthrough;
+ 
+-            wxString key;
++    for( std::unique_ptr<LIB_TREE_NODE>& child : aChildren )
++    {
++        if( child->m_Type == LIB_TREE_NODE::TYPE::ITEM )
++            groupMap[getGroupKey( *child, groupColumn )].push_back( std::move( child ) );
++        else
++            passthrough.push_back( std::move( child ) );
++    }
+ 
+-            if( m_groupByColumn == wxT( "Description" ) )
+-                key = item->m_Desc;
+-            else if( item->m_Fields.count( m_groupByColumn ) )
+-                key = item->m_Fields.at( m_groupByColumn );
++    LIB_TREE_NODE::PTR_VECTOR groupedChildren = std::move( passthrough );
+ 
+-            if( key.IsEmpty() )
+-                key = _( "(ungrouped)" );
++    for( auto& [groupValue, children] : groupMap )
++    {
++        auto group = std::make_unique<LIB_TREE_NODE_GROUP>( aParent, groupColumn, groupValue );
+ 
+-            groupMap[key].push_back( i );
+-        }
++        group->m_Children = buildGroupLevel( group.get(), std::move( children ), aGroupIndex + 1 );
+ 
+-        // If all items fall into one group, don't bother grouping
+-        if( groupMap.size() <= 1 )
+-            continue;
++        for( const std::unique_ptr<LIB_TREE_NODE>& child : group->m_Children )
++            group->m_Score = std::max( group->m_Score, child->m_Score );
+ 
+-        // Create GROUP nodes and move ITEM nodes into them
+-        LIB_TREE_NODE::PTR_VECTOR newChildren;
++        groupedChildren.push_back( std::move( group ) );
++    }
+ 
+-        // Preserve any non-ITEM children first (shouldn't happen, but be safe)
+-        for( auto& child : lib->m_Children )
+-        {
+-            if( child && child->m_Type != LIB_TREE_NODE::TYPE::ITEM )
+-                newChildren.push_back( std::move( child ) );
+-        }
++    return groupedChildren;
++}
+ 
+-        for( auto& [groupName, indices] : groupMap )
+-        {
+-            auto group = std::make_unique<LIB_TREE_NODE_GROUP>( lib.get(), groupName );
+ 
+-            for( size_t idx : indices )
+-            {
+-                if( lib->m_Children[idx] )
+-                    group->AddChild( std::move( lib->m_Children[idx] ) );
+-            }
++void LIB_TREE_MODEL_ADAPTER::assignIntrinsicRanksRecursive( LIB_TREE_NODE& aNode )
++{
++    aNode.AssignIntrinsicRanks( m_shownColumns );
+ 
+-            // Propagate existing scores from children so GetChildren() doesn't
+-            // filter out the new GROUP node (it checks m_Score > 0).
+-            for( const auto& child : group->m_Children )
+-                group->m_Score = std::max( group->m_Score, child->m_Score );
++    for( std::unique_ptr<LIB_TREE_NODE>& child : aNode.m_Children )
++        assignIntrinsicRanksRecursive( *child );
++}
+ 
+-            group->AssignIntrinsicRanks( m_shownColumns );
+-            newChildren.push_back( std::move( group ) );
+-        }
+ 
+-        lib->m_Children = std::move( newChildren );
++void LIB_TREE_MODEL_ADAPTER::rebuildGroupNodes()
++{
++    // Always start by flattening any existing grouping
++    flattenGroups();
++
++    if( m_groupByColumns.empty() )
++        return;
++
++    for( std::unique_ptr<LIB_TREE_NODE>& lib : m_tree.m_Children )
++    {
++        if( lib->m_Type != LIB_TREE_NODE::TYPE::LIBRARY )
++            continue;
++
++        lib->m_Children = buildGroupLevel( lib.get(), std::move( lib->m_Children ), 0 );
++        assignIntrinsicRanksRecursive( *lib );
+     }
+ }
+diff --git a/eeschema/symbol_tree_model_adapter.cpp b/eeschema/symbol_tree_model_adapter.cpp
+--- a/eeschema/symbol_tree_model_adapter.cpp
++++ b/eeschema/symbol_tree_model_adapter.cpp
+@@ -69,7 +69,7 @@
+         m_colWidths[pair.first] = pair.second;
+ 
+     m_shownColumns = m_cfg.columns;
+-    m_groupByColumn = m_cfg.group_by_column;
++    m_groupByColumns = m_cfg.group_by_columns;
+ 
+     if( m_shownColumns.empty() )
+         m_shownColumns = {  _HKI( "Item" ), _HKI( "Description" ), GetDefaultFieldName( FIELD_T::VALUE, false ) };
+@@ -213,6 +213,9 @@
+ 
+     m_tree.AssignIntrinsicRanks( m_shownColumns );
+ 
++    if( anyLoaded && !GetGroupColumns().empty() )
++        rebuildGroupNodes();
++
+     if( isLazyLoad && anyLoaded && m_lazyLoadHandler )
+     {
+         createMissingColumns();
+diff --git a/eeschema/symbol_tree_synchronizing_adapter.cpp b/eeschema/symbol_tree_synchronizing_adapter.cpp
+--- a/eeschema/symbol_tree_synchronizing_adapter.cpp
++++ b/eeschema/symbol_tree_synchronizing_adapter.cpp
+@@ -156,7 +156,7 @@
+     m_tree.AssignIntrinsicRanks( m_shownColumns );
+ 
+     // Re-apply grouping if active (updateLibrary flattens groups before syncing).
+-    if( !GetGroupColumn().IsEmpty() )
++    if( !GetGroupColumns().empty() )
+         rebuildGroupNodes();
+ }
+ 
+@@ -179,27 +179,7 @@
+ {
+     // Flatten any GROUP nodes back to direct ITEM children before syncing.
+     // Groups will be rebuilt at the end of Sync() via rebuildGroupNodes().
+-    {
+-        LIB_TREE_NODE::PTR_VECTOR flatChildren;
+-
+-        for( auto& child : aLibNode.m_Children )
+-        {
+-            if( child->m_Type == LIB_TREE_NODE::TYPE::GROUP )
+-            {
+-                for( auto& item : child->m_Children )
+-                {
+-                    item->m_Parent = &aLibNode;
+-                    flatChildren.push_back( std::move( item ) );
+-                }
+-            }
+-            else
+-            {
+-                flatChildren.push_back( std::move( child ) );
+-            }
+-        }
+-
+-        aLibNode.m_Children = std::move( flatChildren );
+-    }
++    flattenGroupChildren( aLibNode );
+ 
+     auto hashIt = m_libHashes.find( aLibNode.m_Name );
+ 
+diff --git a/common/widgets/lib_tree.cpp b/common/widgets/lib_tree.cpp
+--- a/common/widgets/lib_tree.cpp
++++ b/common/widgets/lib_tree.cpp
+@@ -1063,8 +1063,10 @@
+     wxString clickedColumnName;
+     bool hasClickedColumn = ( colIdx >= 0 && m_adapter->GetColumnName( colIdx, clickedColumnName ) );
+ 
+-    // "Group by '...'" menu item
++    // Grouping menu items
+     int groupById = wxID_NONE;
++    int addGroupById = wxID_NONE;
++    int removeColumnGroupId = wxID_NONE;
+ 
+     if( hasClickedColumn && clickedColumnName != _HKI( "Item" ) )
+     {
+@@ -1074,19 +1076,35 @@
+         wxMenuItem* mi = menu.Append( wxID_ANY, label );
+         groupById = mi->GetId();
+ 
+-        if( m_adapter->GetGroupColumn() == clickedColumnName )
++        if( m_adapter->GetGroupColumns().size() == 1 && m_adapter->IsGroupColumn( clickedColumnName ) )
+             mi->Enable( false );
++
++        label = wxString::Format( _( "Add '%s' to Grouping" ),
++                                  wxGetTranslation( clickedColumnName ) );
++        mi = menu.Append( wxID_ANY, label );
++        addGroupById = mi->GetId();
++
++        if( m_adapter->IsGroupColumn( clickedColumnName ) )
++            mi->Enable( false );
++
++        if( m_adapter->IsGroupColumn( clickedColumnName ) )
++        {
++            label = wxString::Format( _( "Remove '%s' from Grouping" ),
++                                      wxGetTranslation( clickedColumnName ) );
++            mi = menu.Append( wxID_ANY, label );
++            removeColumnGroupId = mi->GetId();
++        }
+     }
+ 
+-    // "Remove Grouping" menu item
++    // "Clear Grouping" menu item
+     int removeGroupId = wxID_NONE;
+ 
+-    if( !m_adapter->GetGroupColumn().IsEmpty() )
++    if( !m_adapter->GetGroupColumns().empty() )
+     {
+         if( !hasClickedColumn || clickedColumnName == _HKI( "Item" ) )
+             menu.AppendSeparator();
+ 
+-        wxMenuItem* mi = menu.Append( wxID_ANY, _( "Remove Grouping" ) );
++        wxMenuItem* mi = menu.Append( wxID_ANY, _( "Clear Grouping" ) );
+         removeGroupId = mi->GetId();
+     }
+ 
+@@ -1108,9 +1126,17 @@
+     {
+         m_adapter->SetGroupColumn( clickedColumnName );
+     }
++    else if( selection == addGroupById && addGroupById != wxID_NONE )
++    {
++        m_adapter->AddGroupColumn( clickedColumnName );
++    }
++    else if( selection == removeColumnGroupId && removeColumnGroupId != wxID_NONE )
++    {
++        m_adapter->RemoveGroupColumn( clickedColumnName );
++    }
+     else if( selection == removeGroupId && removeGroupId != wxID_NONE )
+     {
+-        m_adapter->SetGroupColumn( wxEmptyString );
++        m_adapter->ClearGroupColumns();
+     }
+ 
+     m_previewDisabled = !m_hoverPreviewEnabled;
