@@ -1,0 +1,164 @@
+diff --git a/include/widgets/lib_tree.h b/include/widgets/lib_tree.h
+--- a/include/widgets/lib_tree.h
++++ b/include/widgets/lib_tree.h
+@@ -34,10 +34,12 @@
+ 
+ class wxTextCtrl;
+ class wxHtmlLinkEvent;
++class wxPanel;
+ class wxSearchCtrl;
+ class wxTimer;
+ class wxTimerEvent;
+ class wxPopupWindow;
++class wxWrapSizer;
+ class BITMAP_BUTTON;
+ class STD_BITMAP_BUTTON;
+ class ACTION_MENU;
+@@ -254,6 +256,8 @@
+     void onPreselect( wxCommandEvent& aEvent );
+     void onItemContextMenu( wxDataViewEvent& aEvent );
+     void onHeaderContextMenu( wxDataViewEvent& aEvent );
++    void updateGroupingControls();
++    void removeGroupingColumn( const wxString& aColumn );
+ 
+     void onDebounceTimer( wxTimerEvent& aEvent );
+ 
+@@ -270,6 +274,8 @@
+     wxString           m_recentSearchesKey;
+ 
+     wxBoxSizer*        m_filtersSizer;
++    wxPanel*           m_groupingPanel;
++    wxWrapSizer*       m_groupingSizer;
+ 
+     bool               m_skipNextRightClick;
+ 
+diff --git a/common/widgets/lib_tree.cpp b/common/widgets/lib_tree.cpp
+--- a/common/widgets/lib_tree.cpp
++++ b/common/widgets/lib_tree.cpp
+@@ -39,7 +39,10 @@
+ #include <wx/sizer.h>
+ #include <wx/srchctrl.h>
+ #include <wx/statline.h>
++#include <wx/stattext.h>
++#include <wx/button.h>
+ #include <wx/popupwin.h>
++#include <wx/wrapsizer.h>
+ 
+ #include <eda_doc.h>                    // for GetAssociatedDocument()
+ #include <pgm_base.h>                   // for PROJECT
+@@ -62,6 +65,8 @@
+         m_inTimerEvent( false ),
+         m_recentSearchesKey( aRecentSearchesKey ),
+         m_filtersSizer( nullptr ),
++        m_groupingPanel( nullptr ),
++        m_groupingSizer( nullptr ),
+         m_skipNextRightClick( false ),
+         m_previewWindow( nullptr ),
+         m_previewDisabled( aFlags & NO_HOVER_PREVIEW ),
+@@ -169,6 +174,11 @@
+         sizer->Add( m_filtersSizer, 0, wxEXPAND | wxLEFT, 4 );
+     }
+ 
++    m_groupingPanel = new wxPanel( this, wxID_ANY );
++    m_groupingSizer = new wxWrapSizer( wxHORIZONTAL );
++    m_groupingPanel->SetSizer( m_groupingSizer );
++    sizer->Add( m_groupingPanel, 0, wxEXPAND | wxTOP, 2 );
++
+     // Tree control
+     int dvFlags = ( aFlags & MULTISELECT ) ? wxDV_MULTIPLE : wxDV_SINGLE;
+     m_tree_ctrl = new WX_DATAVIEWCTRL( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, dvFlags );
+@@ -203,6 +213,7 @@
+     }
+ 
+     SetSizer( sizer );
++    updateGroupingControls();
+ 
+     m_tree_ctrl->Bind( wxEVT_DATAVIEW_ITEM_ACTIVATED, &LIB_TREE::onTreeActivate, this );
+     m_tree_ctrl->Bind( wxEVT_DATAVIEW_SELECTION_CHANGED, &LIB_TREE::onTreeSelect, this );
+@@ -309,6 +320,8 @@
+ 
+     if( m_adapter )
+         m_adapter->ShowChangedLanguage();
++
++    updateGroupingControls();
+ }
+ 
+ 
+@@ -1125,23 +1138,77 @@
+     else if( selection == groupById && groupById != wxID_NONE )
+     {
+         m_adapter->SetGroupColumn( clickedColumnName );
++        updateGroupingControls();
+     }
+     else if( selection == addGroupById && addGroupById != wxID_NONE )
+     {
+         m_adapter->AddGroupColumn( clickedColumnName );
++        updateGroupingControls();
+     }
+     else if( selection == removeColumnGroupId && removeColumnGroupId != wxID_NONE )
+     {
+         m_adapter->RemoveGroupColumn( clickedColumnName );
++        updateGroupingControls();
+     }
+     else if( selection == removeGroupId && removeGroupId != wxID_NONE )
+     {
+         m_adapter->ClearGroupColumns();
++        updateGroupingControls();
+     }
+ 
+     m_previewDisabled = !m_hoverPreviewEnabled;
+ }
+ 
+ 
++void LIB_TREE::updateGroupingControls()
++{
++    if( !m_groupingPanel || !m_groupingSizer )
++        return;
++
++    m_groupingSizer->Clear( true );
++
++    const std::vector<wxString>& groupColumns = m_adapter->GetGroupColumns();
++
++    if( groupColumns.empty() )
++    {
++        m_groupingPanel->Hide();
++        Layout();
++        return;
++    }
++
++    wxStaticText* label = new wxStaticText( m_groupingPanel, wxID_ANY, _( "Grouped by:" ) );
++    m_groupingSizer->Add( label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT | wxBOTTOM, FromDIP( 4 ) );
++
++    for( const wxString& column : groupColumns )
++    {
++        wxString displayName = wxGetTranslation( column );
++        wxString buttonLabel = wxString::Format( wxT( "%s  x" ), displayName );
++
++        wxButton* button = new wxButton( m_groupingPanel, wxID_ANY, buttonLabel,
++                                         wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT );
++        button->SetToolTip( wxString::Format( _( "Remove '%s' from grouping" ), displayName ) );
++        button->Bind( wxEVT_BUTTON,
++                [this, column]( wxCommandEvent& )
++                {
++                    removeGroupingColumn( column );
++                } );
++
++        m_groupingSizer->Add( button, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT | wxBOTTOM,
++                              FromDIP( 4 ) );
++    }
++
++    m_groupingPanel->Show();
++    m_groupingPanel->Layout();
++    Layout();
++}
++
++
++void LIB_TREE::removeGroupingColumn( const wxString& aColumn )
++{
++    m_adapter->RemoveGroupColumn( aColumn );
++    updateGroupingControls();
++}
++
++
+ wxDEFINE_EVENT( EVT_LIBITEM_SELECTED, wxCommandEvent );
+ wxDEFINE_EVENT( EVT_LIBITEM_CHOSEN, wxCommandEvent );

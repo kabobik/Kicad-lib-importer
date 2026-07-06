@@ -99,11 +99,11 @@
 
 ## Фаза 6. UI меток группировки
 
-- [ ] Добавить в `LIB_TREE` строку grouping chips под search/filter row.
-- [ ] Показывать chips только когда `m_groupByColumns` не пуст.
-- [ ] Chip содержит имя поля и кнопку удаления.
-- [ ] Удаление chip вызывает `RemoveGroupColumn()`.
-- [ ] Header context menu расширить пунктами:
+- [x] Добавить в `LIB_TREE` строку grouping chips под search/filter row.
+- [x] Показывать chips только когда `m_groupByColumns` не пуст.
+- [x] Chip содержит имя поля и кнопку удаления.
+- [x] Удаление chip вызывает `RemoveGroupColumn()`.
+- [x] Header context menu расширить пунктами:
       - `Group by this column`;
       - `Add to grouping`;
       - `Remove from grouping`;
@@ -126,7 +126,7 @@
 - [ ] Разбить изменения на последовательные патчи:
       - [x] `0010-lib-tree-multigroup-model.patch` включает model,
         recursive groups и effective columns;
-      - `0011-lib-tree-grouping-ui.patch`;
+      - [x] `0011-lib-tree-grouping-ui.patch`;
       - `0012-symbol-tree-display-cleanup.patch`;
       - `0013-symbol-tree-compact-display.patch`;
       - `0014-symbol-sidebar-details-polish.patch`.
