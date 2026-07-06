@@ -130,13 +130,13 @@
       - [x] `0011-lib-tree-grouping-ui.patch`;
       - [x] `0012-symbol-tree-display-cleanup.patch`;
       - [x] `0013-symbol-tree-compact-display.patch`;
-      - `0014-symbol-sidebar-details-polish.patch`.
+      - [x] `0014-lib-tree-expanded-state.patch`.
 
 ## Блокеры и риски
 
 - **Нет внешних блокеров.** Задача реализуема в текущем стеке wxWidgets/KiCad.
-- **Главный одноуровневый блокер закрыт в `0010`.** Оставшиеся риски в UI:
-  chips группировки, display value для tree-column и сохранение expanded state.
+- **Главный одноуровневый блокер закрыт в `0010`.** UI chips, display cleanup
+  и сохранение expanded state закрыты в `0011`-`0014`.
 - **Общий adapter используется не только символами.** `LIB_TREE_MODEL_ADAPTER`
   общий для symbol/design-block деревьев, поэтому изменения надо делать
   обратимо и с дефолтами, чтобы не сломать другие деревья.
@@ -147,5 +147,6 @@
   настройки этого окна.
 - **Поиск не должен деградировать.** Скрытие grouped columns из UI не должно
   удалять их из search terms.
-- **Сохранение expanded state может сломаться.** Для nested groups нужны
-  устойчивые ключи group path, а не только имена библиотек.
+- **Настраиваемая tree-column пока не реализована.** После `0012` сырой
+  service-prefix скрывается в display value, но отдельного выбора поля для
+  первой tree-column еще нет.

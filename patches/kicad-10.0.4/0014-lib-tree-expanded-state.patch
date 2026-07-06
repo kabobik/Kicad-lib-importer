@@ -1,0 +1,150 @@
+diff --git a/include/widgets/lib_tree.h b/include/widgets/lib_tree.h
+--- a/include/widgets/lib_tree.h
++++ b/include/widgets/lib_tree.h
+@@ -219,7 +219,7 @@
+     struct STATE
+     {
+         /// List of expanded nodes.
+-        std::vector<wxDataViewItem> expanded;
++        std::vector<wxString> expanded;
+ 
+         /// Current selection, might be not valid if nothing was selected.
+         LIB_ID selection;
+@@ -236,6 +236,10 @@
+      * Restore the symbol tree widget state from an object.
+      */
+     void setState( const STATE& aState );
++    wxString getStateKey( const LIB_TREE_NODE* aNode ) const;
++    void collectExpandedState( const wxDataViewItem& aItem, STATE& aState ) const;
++    void restoreExpandedState( const wxDataViewItem& aItem,
++                               const std::vector<wxString>& aExpandedKeys );
+ 
+     void updateRecentSearchMenu();
+ 
+diff --git a/common/widgets/lib_tree.cpp b/common/widgets/lib_tree.cpp
+--- a/common/widgets/lib_tree.cpp
++++ b/common/widgets/lib_tree.cpp
+@@ -607,14 +607,8 @@
+ LIB_TREE::STATE LIB_TREE::getState() const
+ {
+     STATE state;
+-    wxDataViewItemArray items;
+-    m_adapter->GetChildren( wxDataViewItem( nullptr ), items );
+ 
+-    for( const wxDataViewItem& item : items )
+-    {
+-        if( m_tree_ctrl->IsExpanded( item ) )
+-            state.expanded.push_back( item );
+-    }
++    collectExpandedState( wxDataViewItem( nullptr ), state );
+ 
+     state.selection = GetSelectedLibId();
+ 
+@@ -631,8 +625,7 @@
+ {
+     m_tree_ctrl->Freeze();
+ 
+-    for( const wxDataViewItem& item : aState.expanded )
+-        m_tree_ctrl->Expand( item );
++    restoreExpandedState( wxDataViewItem( nullptr ), aState.expanded );
+ 
+     // TODO(JE) probably remove this; it fights with centerIfValid
+     // m_tree_ctrl->SetScrollPos( wxHORIZONTAL, aState.scrollpos.x );
+@@ -647,6 +640,97 @@
+ }
+ 
+ 
++wxString LIB_TREE::getStateKey( const LIB_TREE_NODE* aNode ) const
++{
++    if( !aNode )
++        return wxEmptyString;
++
++    std::vector<wxString> parts;
++
++    for( const LIB_TREE_NODE* node = aNode;
++            node && node->m_Type != LIB_TREE_NODE::TYPE::ROOT;
++            node = node->m_Parent )
++    {
++        switch( node->m_Type )
++        {
++        case LIB_TREE_NODE::TYPE::LIBRARY:
++            parts.push_back( wxT( "L:" ) + node->m_Name );
++            break;
++
++        case LIB_TREE_NODE::TYPE::GROUP:
++        {
++            const LIB_TREE_NODE_GROUP* group = static_cast<const LIB_TREE_NODE_GROUP*>( node );
++            parts.push_back( wxT( "G:" ) + group->m_GroupColumn + wxT( "=" ) + group->m_GroupValue );
++            break;
++        }
++
++        case LIB_TREE_NODE::TYPE::ITEM:
++            parts.push_back( wxT( "I:" ) + wxString( node->m_LibId.Format().wx_str() ) );
++            break;
++
++        case LIB_TREE_NODE::TYPE::UNIT:
++            parts.push_back( wxString::Format( wxT( "U:%d" ), node->m_Unit ) );
++            break;
++
++        default:
++            parts.push_back( wxT( "N:" ) + node->m_Name );
++            break;
++        }
++    }
++
++    std::reverse( parts.begin(), parts.end() );
++
++    wxString key;
++
++    for( const wxString& part : parts )
++    {
++        key += wxString::Format( wxT( "%u:" ), static_cast<unsigned>( part.Length() ) );
++        key += part;
++    }
++
++    return key;
++}
++
++
++void LIB_TREE::collectExpandedState( const wxDataViewItem& aItem, STATE& aState ) const
++{
++    wxDataViewItemArray children;
++    m_adapter->GetChildren( aItem, children );
++
++    for( const wxDataViewItem& child : children )
++    {
++        if( !m_tree_ctrl->IsExpanded( child ) )
++            continue;
++
++        wxString key = getStateKey( m_adapter->GetTreeNodeFor( child ) );
++
++        if( !key.IsEmpty() )
++            aState.expanded.push_back( key );
++
++        collectExpandedState( child, aState );
++    }
++}
++
++
++void LIB_TREE::restoreExpandedState( const wxDataViewItem& aItem,
++                                     const std::vector<wxString>& aExpandedKeys )
++{
++    wxDataViewItemArray children;
++    m_adapter->GetChildren( aItem, children );
++
++    for( const wxDataViewItem& child : children )
++    {
++        wxString key = getStateKey( m_adapter->GetTreeNodeFor( child ) );
++
++        if( std::find( aExpandedKeys.begin(), aExpandedKeys.end(), key ) == aExpandedKeys.end() )
++            continue;
++
++        m_tree_ctrl->Expand( child );
++        restoreExpandedState( child, aExpandedKeys );
++    }
++}
++
++
+ void LIB_TREE::onQueryText( wxCommandEvent& aEvent )
+ {
+     m_debounceTimer->StartOnce( 200 );
