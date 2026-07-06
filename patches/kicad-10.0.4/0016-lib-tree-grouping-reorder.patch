@@ -1,0 +1,84 @@
+diff --git a/include/widgets/lib_tree.h b/include/widgets/lib_tree.h
+--- a/include/widgets/lib_tree.h
++++ b/include/widgets/lib_tree.h
+@@ -263,6 +263,7 @@
+     void onHeaderContextMenu( wxDataViewEvent& aEvent );
+     void updateGroupingControls();
+     void removeGroupingColumn( const wxString& aColumn );
++    void moveGroupingColumn( const wxString& aColumn, int aOffset );
+ 
+     void onDebounceTimer( wxTimerEvent& aEvent );
+ 
+diff --git a/common/widgets/lib_tree.cpp b/common/widgets/lib_tree.cpp
+--- a/common/widgets/lib_tree.cpp
++++ b/common/widgets/lib_tree.cpp
+@@ -1284,6 +1284,42 @@
+                 {
+                     removeGroupingColumn( column );
+                 } );
++        button->Bind( wxEVT_CONTEXT_MENU,
++                [this, column]( wxContextMenuEvent& )
++                {
++                    const std::vector<wxString>& menuGroupColumns = m_adapter->GetGroupColumns();
++                    auto it = std::find( menuGroupColumns.begin(), menuGroupColumns.end(), column );
++
++                    if( it == menuGroupColumns.end() )
++                        return;
++
++                    size_t idx = std::distance( menuGroupColumns.begin(), it );
++                    wxMenu menu;
++                    int moveLeftId = wxID_NONE;
++                    int moveRightId = wxID_NONE;
++                    int removeId = wxID_NONE;
++
++                    wxMenuItem* item = menu.Append( wxID_ANY, _( "Move Left" ) );
++                    moveLeftId = item->GetId();
++                    item->Enable( idx > 0 );
++
++                    item = menu.Append( wxID_ANY, _( "Move Right" ) );
++                    moveRightId = item->GetId();
++                    item->Enable( idx + 1 < menuGroupColumns.size() );
++
++                    menu.AppendSeparator();
++                    item = menu.Append( wxID_ANY, _( "Remove from Grouping" ) );
++                    removeId = item->GetId();
++
++                    int selection = GetPopupMenuSelectionFromUser( menu );
++
++                    if( selection == moveLeftId )
++                        moveGroupingColumn( column, -1 );
++                    else if( selection == moveRightId )
++                        moveGroupingColumn( column, 1 );
++                    else if( selection == removeId )
++                        removeGroupingColumn( column );
++                } );
+ 
+         m_groupingSizer->Add( button, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT | wxBOTTOM, gap );
+     }
+@@ -1300,6 +1336,26 @@
+     updateGroupingControls();
+ }
+ 
++
++void LIB_TREE::moveGroupingColumn( const wxString& aColumn, int aOffset )
++{
++    std::vector<wxString> columns = m_adapter->GetGroupColumns();
++    auto it = std::find( columns.begin(), columns.end(), aColumn );
++
++    if( it == columns.end() )
++        return;
++
++    int oldIndex = std::distance( columns.begin(), it );
++    int newIndex = oldIndex + aOffset;
++
++    if( newIndex < 0 || newIndex >= static_cast<int>( columns.size() ) )
++        return;
++
++    std::swap( columns[oldIndex], columns[newIndex] );
++    m_adapter->SetGroupColumns( columns );
++    updateGroupingControls();
++}
++
+ 
+ wxDEFINE_EVENT( EVT_LIBITEM_SELECTED, wxCommandEvent );
+ wxDEFINE_EVENT( EVT_LIBITEM_CHOSEN, wxCommandEvent );

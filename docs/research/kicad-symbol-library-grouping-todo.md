@@ -110,7 +110,7 @@
       - `Add to grouping`;
       - `Remove from grouping`;
       - `Clear grouping`.
-- [ ] Опционально добавить reorder группировок через контекстное меню или
+- [x] Опционально добавить reorder группировок через контекстное меню или
       drag/drop chips.
 
 ## Фаза 7. Compact mode для боковой панели
@@ -132,13 +132,14 @@
       - [x] `0012-symbol-tree-display-cleanup.patch`;
       - [x] `0013-symbol-tree-compact-display.patch`;
       - [x] `0014-lib-tree-expanded-state.patch`;
-      - [x] `0015-lib-tree-display-columns.patch`.
+      - [x] `0015-lib-tree-display-columns.patch`;
+      - [x] `0016-lib-tree-grouping-reorder.patch`.
 
 ## Блокеры и риски
 
 - **Нет внешних блокеров.** Задача реализуема в текущем стеке wxWidgets/KiCad.
-- **Главный одноуровневый блокер закрыт в `0010`.** UI chips, display cleanup
-  и сохранение expanded state закрыты в `0011`-`0014`.
+- **Главный одноуровневый блокер закрыт в `0010`.** UI chips, display cleanup,
+  expanded state, display columns и reorder закрыты в `0011`-`0016`.
 - **Общий adapter используется не только символами.** `LIB_TREE_MODEL_ADAPTER`
   общий для symbol/design-block деревьев, поэтому изменения надо делать
   обратимо и с дефолтами, чтобы не сломать другие деревья.
