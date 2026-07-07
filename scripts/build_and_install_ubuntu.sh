@@ -494,9 +494,7 @@ find_patch_dir() {
     local version="$1"
     local exact="$PATCHES_DIR/kicad-$version"
 
-    if [[ -d "$exact" ]] \
-       && { compgen -G "$exact"/*.patch &>/dev/null 2>&1 \
-            || compgen -G "$exact"/*.diff &>/dev/null 2>&1; }; then
+    if [[ -d "$exact" ]] && patch_dir_has_patches "$exact"; then
         echo "$exact"
         return 0
     fi
@@ -504,7 +502,9 @@ find_patch_dir() {
     # Ищем ближайшую версию
     local available=()
     while IFS= read -r -d '' d; do
-        available+=("$(basename "$d" | sed 's/kicad-//')")
+        if patch_dir_has_patches "$d"; then
+            available+=("$(basename "$d" | sed 's/kicad-//')")
+        fi
     done < <(find "$PATCHES_DIR" -maxdepth 1 -name "kicad-*" -type d -print0 | sort -z)
 
     if [[ ${#available[@]} -eq 0 ]]; then
@@ -529,7 +529,39 @@ find_patch_dir() {
 # ── Список патчей в директории ────────────────────────────────────────────
 list_patches() {
     local patch_dir="$1"
-    find "$patch_dir" -maxdepth 1 \( -name "*.patch" -o -name "*.diff" \) | sort
+    local series_file="$patch_dir/series"
+
+    if [[ -f "$series_file" ]]; then
+        local entry
+
+        while IFS= read -r entry; do
+            entry="${entry%%#*}"
+            entry="${entry#"${entry%%[![:space:]]*}"}"
+            entry="${entry%"${entry##*[![:space:]]}"}"
+
+            [[ -z "$entry" ]] && continue
+
+            if [[ "$entry" = /* ]]; then
+                printf '%s\n' "$entry"
+            else
+                printf '%s/%s\n' "$patch_dir" "$entry"
+            fi
+        done < "$series_file"
+    else
+        find "$patch_dir" -maxdepth 1 \( -name "*.patch" -o -name "*.diff" \) | sort
+    fi
+}
+
+patch_dir_has_patches() {
+    local patch_dir="$1"
+    local patch_file
+    local found=false
+
+    while IFS= read -r patch_file; do
+        [[ -n "$patch_file" ]] && found=true
+    done < <(list_patches "$patch_dir")
+
+    $found
 }
 
 # ── Хэш набора патчей ─────────────────────────────────────────────────────
@@ -548,9 +580,10 @@ compute_hash() {
         echo "kicad_lib=$KICAD_LIB_DIR"
         echo "kicad_user_plugin=$KICAD_USER_PLUGIN_DIR"
         echo "source_url_template=$KICAD_SOURCE_URL_TEMPLATE"
-        list_patches "$patch_dir" | while IFS= read -r patch; do
-            echo "patch=$(basename "$patch")"
-            cat "$patch"
+        list_patches "$patch_dir" | while IFS= read -r patch_file; do
+            patch_name="${patch_file#$patch_dir/}"
+            echo "patch=$patch_name"
+            cat "$patch_file"
         done
     } | md5sum | awk '{print $1}' | head -c 12
 }
@@ -1412,7 +1445,9 @@ built=$(date -Iseconds)
 builder=$(gcc --version 2>/dev/null | head -1)
 jobs=$JOBS
 host=$(hostname)
-patches=$(list_patches "$patch_dir" | xargs -I{} basename {} | tr '\n' ',')
+patches=$(list_patches "$patch_dir" | while IFS= read -r patch_file; do
+    printf '%s\n' "${patch_file#$patch_dir/}"
+done | tr '\n' ',')
 EOF
 }
 
