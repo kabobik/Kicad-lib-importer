@@ -1,0 +1,280 @@
+--- a/eeschema/widgets/sch_symbol_library_pane.h
++++ b/eeschema/widgets/sch_symbol_library_pane.h
+@@ -31,6 +31,10 @@
+ class LIB_TREE;
+ class SCH_EDIT_FRAME;
+ class SYMBOL_PREVIEW_WIDGET;
++class WX_COLLAPSIBLE_PANE;
++class WX_SPLITTER_WINDOW;
++class wxCommandEvent;
++class wxSplitterEvent;
+ class wxTimer;
+ 
+ 
+@@ -48,11 +52,14 @@
+     void onFootprintSelected( wxCommandEvent& aEvent );
+     void onSymbolSelected( wxCommandEvent& aEvent );
+     void onSymbolChosen( wxCommandEvent& aEvent );
++    void onPreviewPaneChanged( wxCommandEvent& aEvent );
++    void onDetailsPreviewSashChanged( wxSplitterEvent& aEvent );
+ 
+     void showFootprintFor( const LIB_ID& aLibId );
+     void showFootprint( const wxString& aFootprint );
+     void populateFootprintSelector( const LIB_ID& aLibId );
+     void placeSelectedSymbol();
++    void adjustPreviewPaneSashes();
+ 
+ private:
+     SCH_EDIT_FRAME*                         m_frame;
+@@ -62,7 +69,12 @@
+     SYMBOL_PREVIEW_WIDGET*                  m_symbolPreview;
+     FOOTPRINT_SELECT_WIDGET*                m_fpSelect;
+     FOOTPRINT_PREVIEW_WIDGET*               m_fpPreview;
++    WX_SPLITTER_WINDOW*                     m_treeSplitter;
++    WX_SPLITTER_WINDOW*                     m_detailsPreviewSplitter;
++    WX_COLLAPSIBLE_PANE*                    m_detailsPane;
++    WX_COLLAPSIBLE_PANE*                    m_previewPane;
+     wxTimer*                                m_openLibsTimer;
++    int                                     m_detailsPreviewSash;
+     wxString                                m_fpOverride;
+     std::vector<std::pair<FIELD_T, wxString>> m_fieldEdits;
+ };
+--- a/eeschema/widgets/sch_symbol_library_pane.cpp
++++ b/eeschema/widgets/sch_symbol_library_pane.cpp
+@@ -41,9 +41,13 @@
+ #include <widgets/html_window.h>
+ #include <widgets/lib_tree.h>
+ #include <widgets/symbol_preview_widget.h>
++#include <widgets/wx_collapsible_pane.h>
++#include <widgets/wx_splitter_window.h>
+ 
++#include <algorithm>
+ #include <wx/log.h>
+ #include <wx/sizer.h>
++#include <wx/splitter.h>
+ #include <wx/timer.h>
+ 
+ 
+@@ -58,7 +62,12 @@
+         m_symbolPreview( nullptr ),
+         m_fpSelect( nullptr ),
+         m_fpPreview( nullptr ),
+-        m_openLibsTimer( nullptr )
++        m_treeSplitter( nullptr ),
++        m_detailsPreviewSplitter( nullptr ),
++        m_detailsPane( nullptr ),
++        m_previewPane( nullptr ),
++        m_openLibsTimer( nullptr ),
++        m_detailsPreviewSash( 0 )
+ {
+     SYMBOL_LIBRARY_ADAPTER* libmgr = PROJECT_SCH::SymbolLibAdapter( &m_frame->Prj() );
+ 
+@@ -73,12 +82,35 @@
+     adapter->SetTreeDisplayColumns( { wxT( "MPN" ), wxT( "Part Number" ) } );
+ 
+     wxBoxSizer* sizer = new wxBoxSizer( wxVERTICAL );
++    int         paneGap = FromDIP( 2 );
+ 
+-    m_details = new HTML_WINDOW( this, wxID_ANY, wxDefaultPosition, wxDefaultSize );
+-    m_tree = new LIB_TREE( this, wxT( "symbols" ), m_adapter,
++    m_treeSplitter = new WX_SPLITTER_WINDOW( this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
++                                             wxSP_LIVE_UPDATE | wxSP_NOBORDER | wxSP_3DSASH );
++    m_detailsPreviewSplitter = new WX_SPLITTER_WINDOW( m_treeSplitter, wxID_ANY,
++                                                       wxDefaultPosition, wxDefaultSize,
++                                                       wxSP_LIVE_UPDATE | wxSP_NOBORDER
++                                                               | wxSP_3DSASH );
++
++    m_treeSplitter->SetExtraStyle( wxWS_EX_TRANSIENT );
++    m_detailsPreviewSplitter->SetExtraStyle( wxWS_EX_TRANSIENT );
++
++    wxPanel*    treePanel = new wxPanel( m_treeSplitter );
++    wxBoxSizer* treeSizer = new wxBoxSizer( wxVERTICAL );
++    treePanel->SetSizer( treeSizer );
++
++    m_detailsPane = new WX_COLLAPSIBLE_PANE( m_detailsPreviewSplitter, wxID_ANY, _( "Details" ) );
++    wxWindow* detailsContent = m_detailsPane->GetPane();
++    wxBoxSizer* detailsSizer = new wxBoxSizer( wxVERTICAL );
++    detailsContent->SetSizer( detailsSizer );
++
++    m_details = new HTML_WINDOW( detailsContent, wxID_ANY, wxDefaultPosition, wxDefaultSize );
++    detailsSizer->Add( m_details, 1, wxEXPAND | wxALL, paneGap );
++
++    m_tree = new LIB_TREE( treePanel, wxT( "symbols" ), m_adapter,
+                            LIB_TREE::SEARCH | LIB_TREE::DETAILS | LIB_TREE::NO_HOVER_PREVIEW
+-                                   | LIB_TREE::COMPACT,
++                                   | LIB_TREE::COMPACT | LIB_TREE::CHOOSE_ON_DRAG,
+                            m_details );
++    treeSizer->Add( m_tree, 1, wxEXPAND | wxALL, paneGap );
+ 
+     EDA_DRAW_PANEL_GAL::GAL_TYPE backend = EDA_DRAW_PANEL_GAL::GAL_TYPE::GAL_TYPE_OPENGL;
+ 
+@@ -87,28 +119,57 @@
+     else if( COMMON_SETTINGS* cfg = Pgm().GetCommonSettings() )
+         backend = static_cast<EDA_DRAW_PANEL_GAL::GAL_TYPE>( cfg->m_Graphics.canvas_type );
+ 
+-    m_symbolPreview = new SYMBOL_PREVIEW_WIDGET( this, &m_frame->Kiway(), true, backend );
++    m_previewPane = new WX_COLLAPSIBLE_PANE( m_detailsPreviewSplitter, wxID_ANY,
++                                             _( "Symbol and Footprint" ) );
++    wxWindow* previewContent = m_previewPane->GetPane();
++    wxBoxSizer* previewSizer = new wxBoxSizer( wxVERTICAL );
++    previewContent->SetSizer( previewSizer );
++
++    wxPanel*    symbolPanel = new wxPanel( previewContent );
++    wxBoxSizer* symbolSizer = new wxBoxSizer( wxVERTICAL );
++    symbolPanel->SetSizer( symbolSizer );
++
++    wxPanel*    footprintPanel = new wxPanel( previewContent );
++    wxBoxSizer* footprintSizer = new wxBoxSizer( wxVERTICAL );
++    footprintPanel->SetSizer( footprintSizer );
++
++    m_symbolPreview = new SYMBOL_PREVIEW_WIDGET( symbolPanel, &m_frame->Kiway(), true, backend );
+     m_symbolPreview->SetLayoutDirection( wxLayout_LeftToRight );
++    symbolSizer->Add( m_symbolPreview, 1, wxEXPAND | wxALL, paneGap );
+ 
+-    m_fpSelect = new FOOTPRINT_SELECT_WIDGET( m_frame, this );
++    m_fpSelect = new FOOTPRINT_SELECT_WIDGET( m_frame, footprintPanel );
+ 
+-    m_fpPreview = new FOOTPRINT_PREVIEW_WIDGET( this, m_frame->Kiway() );
++    m_fpPreview = new FOOTPRINT_PREVIEW_WIDGET( footprintPanel, m_frame->Kiway() );
+     m_fpPreview->SetUserUnits( m_frame->GetUserUnits() );
+ 
+     if( m_fpPreview->IsInitialized() )
+         m_fpPreview->SetStatusText( wxEmptyString );
+ 
++    footprintSizer->Add( m_fpSelect, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, paneGap );
++    footprintSizer->Add( m_fpPreview, 1, wxEXPAND | wxALL, paneGap );
++
++    previewSizer->Add( symbolPanel, 1, wxEXPAND, 0 );
++    previewSizer->Add( footprintPanel, 1, wxEXPAND, 0 );
++
+     m_details->SetMinSize( wxSize( -1, FromDIP( 88 ) ) );
+-    m_symbolPreview->SetMinSize( wxSize( -1, FromDIP( 140 ) ) );
+-    m_fpPreview->SetMinSize( wxSize( -1, FromDIP( 140 ) ) );
++    m_symbolPreview->SetMinSize( wxSize( -1, FromDIP( 110 ) ) );
++    m_fpPreview->SetMinSize( wxSize( -1, FromDIP( 110 ) ) );
+ 
+-    int paneGap = FromDIP( 2 );
++    detailsContent->Layout();
++    previewContent->Layout();
++    treePanel->Layout();
++
++    m_detailsPreviewSplitter->SetSashGravity( 0.25 );
++    m_detailsPreviewSplitter->SetPaneMinimums( FromDIP( 34 ), FromDIP( 34 ) );
++    m_detailsPreviewSash = FromDIP( 130 );
++    m_detailsPreviewSplitter->SplitHorizontally( m_detailsPane, m_previewPane,
++                                                 m_detailsPreviewSash );
++
++    m_treeSplitter->SetSashGravity( 0.55 );
++    m_treeSplitter->SetPaneMinimums( FromDIP( 140 ), FromDIP( 120 ) );
++    m_treeSplitter->SplitHorizontally( treePanel, m_detailsPreviewSplitter, FromDIP( 360 ) );
+ 
+-    sizer->Add( m_tree, 4, wxEXPAND | wxALL, paneGap );
+-    sizer->Add( m_details, 2, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, paneGap );
+-    sizer->Add( m_symbolPreview, 3, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, paneGap );
+-    sizer->Add( m_fpSelect, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, paneGap );
+-    sizer->Add( m_fpPreview, 3, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, paneGap );
++    sizer->Add( m_treeSplitter, 1, wxEXPAND, 0 );
+ 
+     SetSizer( sizer );
+     Layout();
+@@ -128,6 +189,12 @@
+ 
+     Bind( EVT_LIBITEM_SELECTED, &SCH_SYMBOL_LIBRARY_PANE::onSymbolSelected, this );
+     Bind( EVT_LIBITEM_CHOSEN, &SCH_SYMBOL_LIBRARY_PANE::onSymbolChosen, this );
++    m_detailsPane->Bind( WX_COLLAPSIBLE_PANE_CHANGED,
++                         &SCH_SYMBOL_LIBRARY_PANE::onPreviewPaneChanged, this );
++    m_previewPane->Bind( WX_COLLAPSIBLE_PANE_CHANGED,
++                         &SCH_SYMBOL_LIBRARY_PANE::onPreviewPaneChanged, this );
++    m_detailsPreviewSplitter->Bind( wxEVT_SPLITTER_SASH_POS_CHANGED,
++                                    &SCH_SYMBOL_LIBRARY_PANE::onDetailsPreviewSashChanged, this );
+     m_fpSelect->Bind( EVT_FOOTPRINT_SELECTED, &SCH_SYMBOL_LIBRARY_PANE::onFootprintSelected, this );
+ 
+     m_openLibsTimer = new wxTimer( this );
+@@ -143,6 +210,21 @@
+     Unbind( EVT_LIBITEM_SELECTED, &SCH_SYMBOL_LIBRARY_PANE::onSymbolSelected, this );
+     Unbind( EVT_LIBITEM_CHOSEN, &SCH_SYMBOL_LIBRARY_PANE::onSymbolChosen, this );
+ 
++    if( m_detailsPane )
++        m_detailsPane->Unbind( WX_COLLAPSIBLE_PANE_CHANGED,
++                               &SCH_SYMBOL_LIBRARY_PANE::onPreviewPaneChanged, this );
++
++    if( m_previewPane )
++        m_previewPane->Unbind( WX_COLLAPSIBLE_PANE_CHANGED,
++                               &SCH_SYMBOL_LIBRARY_PANE::onPreviewPaneChanged, this );
++
++    if( m_detailsPreviewSplitter )
++    {
++        m_detailsPreviewSplitter->Unbind( wxEVT_SPLITTER_SASH_POS_CHANGED,
++                                          &SCH_SYMBOL_LIBRARY_PANE::onDetailsPreviewSashChanged,
++                                          this );
++    }
++
+     if( m_fpSelect )
+         m_fpSelect->Unbind( EVT_FOOTPRINT_SELECTED, &SCH_SYMBOL_LIBRARY_PANE::onFootprintSelected, this );
+ 
+@@ -159,6 +241,65 @@
+ }
+ 
+ 
++void SCH_SYMBOL_LIBRARY_PANE::onPreviewPaneChanged( wxCommandEvent& aEvent )
++{
++    Freeze();
++    adjustPreviewPaneSashes();
++    Layout();
++    Thaw();
++
++    aEvent.Skip();
++}
++
++
++void SCH_SYMBOL_LIBRARY_PANE::onDetailsPreviewSashChanged( wxSplitterEvent& aEvent )
++{
++    if( m_detailsPane && m_previewPane && m_detailsPane->IsExpanded()
++            && m_previewPane->IsExpanded() )
++    {
++        m_detailsPreviewSash = aEvent.GetSashPosition();
++    }
++
++    aEvent.Skip();
++}
++
++
++void SCH_SYMBOL_LIBRARY_PANE::adjustPreviewPaneSashes()
++{
++    if( !m_detailsPreviewSplitter || !m_detailsPane || !m_previewPane
++            || !m_detailsPreviewSplitter->IsSplit() )
++    {
++        return;
++    }
++
++    int splitterHeight = m_detailsPreviewSplitter->GetClientSize().y;
++
++    if( splitterHeight <= 0 )
++        return;
++
++    int minHeaderHeight = FromDIP( 28 );
++    int detailsHeaderHeight = std::max( minHeaderHeight, m_detailsPane->GetBestSize().y );
++    int previewHeaderHeight = std::max( minHeaderHeight, m_previewPane->GetBestSize().y );
++
++    if( m_detailsPane->IsCollapsed() && !m_previewPane->IsCollapsed() )
++    {
++        m_detailsPreviewSplitter->SetSashPosition( detailsHeaderHeight );
++    }
++    else if( !m_detailsPane->IsCollapsed() && m_previewPane->IsCollapsed() )
++    {
++        m_detailsPreviewSplitter->SetSashPosition(
++                std::max( minHeaderHeight, splitterHeight - previewHeaderHeight ) );
++    }
++    else if( m_detailsPane->IsExpanded() && m_previewPane->IsExpanded()
++             && m_detailsPreviewSash > 0 )
++    {
++        m_detailsPreviewSplitter->SetSashPosition( m_detailsPreviewSash );
++    }
++
++    m_detailsPreviewSplitter->Layout();
++}
++
++
+ void SCH_SYMBOL_LIBRARY_PANE::Regenerate()
+ {
+     LIB_ID savedSelection = m_tree->GetSelectedLibId();

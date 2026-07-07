@@ -1,0 +1,154 @@
+--- a/include/widgets/lib_tree.h
++++ b/include/widgets/lib_tree.h
+@@ -61,7 +61,8 @@
+         ALL_WIDGETS = 0x0F,
+         MULTISELECT = 0x10,
+         NO_HOVER_PREVIEW = 0x20,
+-        COMPACT = 0x40
++        COMPACT = 0x40,
++        CHOOSE_ON_DRAG = 0x80
+     };
+ 
+     /**
+@@ -252,6 +253,7 @@
+ 
+     void onTreeSelect( wxDataViewEvent& aEvent );
+     void onTreeActivate( wxDataViewEvent& aEvent );
++    void onTreeBeginDrag( wxDataViewEvent& aEvent );
+     void onTreeCharHook( wxKeyEvent& aEvent );
+ 
+     void onIdle( wxIdleEvent& aEvent );
+@@ -295,6 +297,7 @@
+     bool               m_previewDisabled;
+     bool               m_hoverPreviewEnabled;
+     bool               m_compactMode;
++    bool               m_chooseOnDrag;
+ };
+ 
+ /// Custom event sent when an item is selected in the list.
+--- a/common/widgets/lib_tree.cpp
++++ b/common/widgets/lib_tree.cpp
+@@ -35,6 +35,7 @@
+ #include <tool/actions.h>
+ #include <tool/tool_dispatcher.h>
+ #include <widgets/wx_dataviewctrl.h>
++#include <wx/font.h>
+ #include <wx/settings.h>
+ #include <wx/sizer.h>
+ #include <wx/srchctrl.h>
+@@ -49,6 +50,7 @@
+ #include <settings/settings_manager.h>  // for PROJECT
+ 
+ constexpr int RECENT_SEARCHES_MAX = 10;
++constexpr double COMPACT_TREE_FONT_SCALE = 0.90;
+ 
+ std::map<wxString, std::vector<wxString>> g_recentSearches;
+ 
+@@ -71,7 +73,8 @@
+         m_previewWindow( nullptr ),
+         m_previewDisabled( aFlags & NO_HOVER_PREVIEW ),
+         m_hoverPreviewEnabled( !( aFlags & NO_HOVER_PREVIEW ) ),
+-        m_compactMode( aFlags & COMPACT )
++        m_compactMode( aFlags & COMPACT ),
++        m_chooseOnDrag( aFlags & CHOOSE_ON_DRAG )
+ {
+     wxBoxSizer* sizer = new wxBoxSizer( wxVERTICAL );
+     int         controlGap = m_compactMode ? 2 : 4;
+@@ -188,11 +191,29 @@
+     m_adapter->AttachTo( m_tree_ctrl );
+ 
+     if( m_compactMode )
++    {
++        wxFont treeFont = m_tree_ctrl->GetFont();
++        int    pointSize = treeFont.GetPointSize();
++
++        if( pointSize > 0 )
++        {
++            int compactPointSize = std::max( 1,
++                                             static_cast<int>( pointSize
++                                                               * COMPACT_TREE_FONT_SCALE ) );
++
++            if( compactPointSize < pointSize )
++                treeFont.SetPointSize( compactPointSize );
++
++            m_tree_ctrl->SetFont( treeFont );
++        }
++
+         m_tree_ctrl->SetIndent( 14 );
++    }
+ 
+ #ifdef __WXGTK__
+     // The GTK renderer seems to calculate row height incorrectly sometimes; but can be overridden
+-    int rowHeight = FromDIP( m_compactMode ? 2 : 6 ) + GetTextExtent( wxS( "pdI" ) ).y;
++    int rowHeight = FromDIP( m_compactMode ? 2 : 6 )
++                    + m_tree_ctrl->GetTextExtent( wxS( "pdI" ) ).y;
+     m_tree_ctrl->SetRowHeight( rowHeight );
+ #endif
+ 
+@@ -227,6 +248,14 @@
+     m_tree_ctrl->Bind( wxEVT_DATAVIEW_COLUMN_HEADER_RIGHT_CLICK, &LIB_TREE::onHeaderContextMenu,
+                        this );
+ 
++#if wxUSE_DRAG_AND_DROP
++    if( m_chooseOnDrag )
++    {
++        m_tree_ctrl->EnableDragSource( wxDF_UNICODETEXT );
++        m_tree_ctrl->Bind( wxEVT_DATAVIEW_ITEM_BEGIN_DRAG, &LIB_TREE::onTreeBeginDrag, this );
++    }
++#endif
++
+     // wxDataViewCtrl eats its mouseMoved events, so we're forced to use idle events to track
+     // the hover state
+     Bind( wxEVT_IDLE, &LIB_TREE::onIdle, this );
+@@ -275,6 +304,11 @@
+     m_tree_ctrl->Unbind( wxEVT_DATAVIEW_COLUMN_HEADER_RIGHT_CLICK, &LIB_TREE::onHeaderContextMenu,
+                          this );
+ 
++#if wxUSE_DRAG_AND_DROP
++    if( m_chooseOnDrag )
++        m_tree_ctrl->Unbind( wxEVT_DATAVIEW_ITEM_BEGIN_DRAG, &LIB_TREE::onTreeBeginDrag, this );
++#endif
++
+     Unbind( wxEVT_IDLE, &LIB_TREE::onIdle, this );
+     m_tree_ctrl->Unbind( wxEVT_CHAR_HOOK, &LIB_TREE::onTreeCharHook, this );
+     Unbind( EVT_LIBITEM_SELECTED, &LIB_TREE::onPreselect, this );
+@@ -1057,6 +1091,39 @@
+ }
+ 
+ 
++void LIB_TREE::onTreeBeginDrag( wxDataViewEvent& aEvent )
++{
++    hidePreview();
++
++    wxDataViewItem item = aEvent.GetItem();
++
++    if( !item.IsOk() )
++    {
++        aEvent.Veto();
++        return;
++    }
++
++    if( item != m_tree_ctrl->GetSelection() )
++    {
++        m_tree_ctrl->UnselectAll();
++        m_tree_ctrl->Select( item );
++        postPreselectEvent();
++    }
++
++    if( !GetSelectedLibId().IsValid() )
++    {
++        aEvent.Veto();
++        return;
++    }
++
++    if( !m_inTimerEvent )
++        updateRecentSearchMenu();
++
++    postSelectEvent();
++    aEvent.Veto();
++}
++
++
+ void LIB_TREE::onDetailsLink( wxHtmlLinkEvent& aEvent )
+ {
+     const wxHtmlLinkInfo& info = aEvent.GetLinkInfo();
