@@ -13,7 +13,7 @@
 # Usage:
 #   ./scripts/build_and_install_arch.sh
 #   ./scripts/build_and_install_arch.sh --check
-#   ./scripts/build_and_install_arch.sh --version 10.0.4 --rebuild
+#   ./scripts/build_and_install_arch.sh --version 10.0.5 --rebuild
 #   ./scripts/build_and_install_arch.sh --from-cache
 #   ./scripts/build_and_install_arch.sh --build-only
 #   ./scripts/build_and_install_arch.sh --restore
@@ -175,7 +175,7 @@ WHAT THE INSTALLER INSTALLS THROUGH PACMAN:
 EXAMPLES:
   ./scripts/build_and_install_arch.sh --check
   ./scripts/build_and_install_arch.sh
-  ./scripts/build_and_install_arch.sh --version 10.0.4 --rebuild
+  ./scripts/build_and_install_arch.sh --version 10.0.5 --rebuild
   ./scripts/build_and_install_arch.sh --from-cache
   ./scripts/build_and_install_arch.sh --restore
 EOF
@@ -650,22 +650,8 @@ prepare_source() {
     ok "Sources ready: $SRC_DIR"
 }
 
-source_dir_version() {
-    local src="$1"
-    [[ -f "$src/.kicad_source_version" ]] || return 1
-    tr -d '[:space:]' < "$src/.kicad_source_version"
-}
-
 prepare_patch_check_source() {
     local version="$1"
-    local check_src="$SRC_DIR"
-
-    if [[ -d "$check_src" && "$(source_dir_version "$check_src" 2>/dev/null || true)" == "$version" ]]; then
-        log "Dry-run uses current source tree: $check_src"
-        PATCH_CHECK_SRC="$check_src"
-        PATCH_CHECK_TMP=""
-        return
-    fi
 
     header "Dry-run sources KiCad $version"
     download_source_archive "$version"
@@ -690,6 +676,7 @@ apply_patches() {
     done < <(list_patches "$patch_dir")
 
     [[ ${#patches[@]} -gt 0 ]] || die "No patches in $patch_dir"
+    command -v git >/dev/null 2>&1 || die "git is required to validate patch structure"
 
     log "Found patches: ${#patches[@]}"
     echo ""
@@ -702,10 +689,14 @@ apply_patches() {
         local check_args=(-p1 --directory="$src" --dry-run)
         local apply_args=(-p1 --directory="$src" --forward)
 
+        if ! git apply --numstat "$patch_file" >/dev/null 2>&1; then
+            echo -e "${RED}fail${NC}"
+            git apply --numstat "$patch_file" 2>&1 | tail -10 || true
+            die "Malformed patch: $name"
+        fi
+
         if patch "${check_args[@]}" < "$patch_file" >/dev/null 2>&1; then
-            if $dry; then
-                echo -e "${GREEN}ok${NC}"
-            elif patch "${apply_args[@]}" < "$patch_file" >/dev/null 2>&1; then
+            if patch "${apply_args[@]}" < "$patch_file" >/dev/null 2>&1; then
                 echo -e "${GREEN}ok${NC}"
             else
                 echo -e "${RED}fail${NC}"
@@ -716,7 +707,8 @@ apply_patches() {
             echo -e "${YELLOW}already applied${NC}"
         elif $dry; then
             echo -e "${RED}fail${NC}"
-            warn "Patch is incompatible: $name"
+            patch -p1 --directory="$src" --dry-run < "$patch_file" 2>&1 | tail -10 || true
+            die "Patch is incompatible: $name"
         else
             echo -e "${RED}fail${NC}"
             patch -p1 --directory="$src" --dry-run < "$patch_file" 2>&1 | tail -10 || true

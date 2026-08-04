@@ -1,7 +1,7 @@
 # KiCad Local Patches
 
 Коллекция патчей для KiCad с автоматической сборкой и установкой.  
-Патчи протестированы на **KiCad 9.0.7**, **9.0.8** и **10.0.4**; для Arch Linux добавлен отдельный установщик.
+Патчи протестированы на **KiCad 9.0.7**, **9.0.8** и **10.0.5**; для Arch Linux добавлен отдельный установщик.
 
 ## Патчи
 
@@ -13,7 +13,7 @@
 | `0004-group-by-column` | 9.0.7 | ✅ работает | Группировка по колонке в дереве библиотек |
 | `0005-auto-bus-entry-posture-fix` | 9.0.7 | ✅ работает | Исправление posture для авто bus entry |
 | `local-patches-combined` | 9.0.8 | ✅ работает | Все патчи кроме altium-null-byte (уже в upstream) |
-| `0001..0008` | 10.0.4 | ✅ проверено | Тематическая серия локальных патчей, включая отдельный фон листа |
+| `0002..0018` | 10.0.5 | ✅ сборка | Полная серия локальных патчей; `0001` уже реализован upstream |
 | `gost-font-multiline` | standalone | ✅ работает | Фикс integer truncation в `GetInterline()` для GOST-шрифтов |
 | `bus-entry-size-properties` | standalone | ✅ работает | Size X/Y в properties bus entry |
 
@@ -23,16 +23,16 @@
 
 ```bash
 # 1. Посмотреть план (ничего не меняет)
-./scripts/build_and_install.sh --check
+./scripts/build_and_install_ubuntu.sh --check
 
 # 2. Собрать и установить (первый раз — 30-60 мин)
-./scripts/build_and_install.sh
+./scripts/build_and_install_ubuntu.sh
 
 # 3. Повторная установка — из кэша (секунды)
-./scripts/build_and_install.sh --from-cache
+./scripts/build_and_install_ubuntu.sh --from-cache
 
 # 4. Откат к оригинальному KiCad
-./scripts/build_and_install.sh --restore
+./scripts/build_and_install_ubuntu.sh --restore
 ```
 ## Клиентский массовый KiCad-маппинг
 
@@ -91,7 +91,7 @@ python3 -m venv .venv
 ./scripts/build_and_install_arch.sh
 
 # 3. Явная версия
-./scripts/build_and_install_arch.sh --version 10.0.4 --rebuild
+./scripts/build_and_install_arch.sh --version 10.0.5 --rebuild
 
 # 4. Повторная установка из кэша
 ./scripts/build_and_install_arch.sh --from-cache
@@ -100,38 +100,55 @@ python3 -m venv .venv
 ./scripts/build_and_install_arch.sh --restore
 ```
 
-## Обновление до KiCad 10.0.4
+## Обновление до KiCad 10.0.5
+
+### Arch Linux
 
 ```bash
-# Проверить, что локальные патчи ложатся на чистую 10.0.4
-./scripts/build_and_install.sh --version 10.0.4 --check
+# Проверить, что локальные патчи ложатся на чистую 10.0.5
+./scripts/build_and_install_arch.sh --version 10.0.5 --check
 
-# Собрать 10.0.4 с локальными патчами в кэш без установки
-./scripts/build_and_install.sh --version 10.0.4 --build-only --rebuild
+# Собрать 10.0.5 с локальными патчами в кэш без установки
+./scripts/build_and_install_arch.sh --version 10.0.5 --build-only --rebuild
 
-# Установить уже собранный кэш поверх текущего KiCad.
-# Флаг --update-libraries обновит official packages библиотек через apt,
-# если для них доступна версия 10.0.4.
-./scripts/build_and_install.sh --version 10.0.4 --from-cache --update-libraries
+# Установить уже собранный кэш поверх текущего KiCad
+./scripts/build_and_install_arch.sh --version 10.0.5 --from-cache
 
 # Либо одним шагом: собрать и установить поверх текущего KiCad
-./scripts/build_and_install.sh --version 10.0.4 --rebuild --update-libraries
+./scripts/build_and_install_arch.sh --version 10.0.5 --rebuild
 ```
 
-При явном `--version` скрипт не требует, чтобы такая же версия уже была в apt:
-если KiCad установлен, базовый пакет сохраняется, а фактическая версия обновляется
-staged-сборкой из исходников. После установки `kicad-cli version` сверяется с
-целевой версией.
+На Arch скрипт проверяет пакеты через `pacman`, собирает staged-дерево с layout
+`/usr/lib` и после установки сверяет `kicad-cli version` с целевой версией.
 
-## Как работает build_and_install.sh
+### Debian / Ubuntu
+
+```bash
+# Проверить серию на чистом архиве 10.0.5
+./scripts/build_and_install_ubuntu.sh --version 10.0.5 --check
+
+# Собрать в кэш без установки
+./scripts/build_and_install_ubuntu.sh --version 10.0.5 --build-only --rebuild
+
+# Установить подготовленный кэш и обновить официальные библиотеки
+./scripts/build_and_install_ubuntu.sh --version 10.0.5 --from-cache --update-libraries
+
+# Либо собрать и установить одним шагом
+./scripts/build_and_install_ubuntu.sh --version 10.0.5 --rebuild --update-libraries
+```
+
+На Debian/Ubuntu установщик проверяет пакеты через `dpkg`/`apt` и использует
+multiarch-layout `/usr/lib/<triplet>`.
+
+## Как работает build_and_install_ubuntu.sh
 
 1. **Определяет** версию установленного KiCad (`dpkg` / `kicad --version`)
 2. **Находит** папку `patches/kicad-X.X.X/` с патчами для этой версии
 3. **Вычисляет** хэш набора патчей → проверяет кэш `cache/kicad-X.X.X-HASH/`
 4. **Если кэш есть** → предлагает установить за секунды
 5. **Если кэша нет**:
-   - клонирует исходники KiCad в `kicad-src/` (или сбрасывает на нужный тег)
-   - проверяет совместимость патчей (`patch --dry-run`)
+   - скачивает официальный архив исходников KiCad и распаковывает его в `kicad-src/`
+   - последовательно применяет патчи после проверки каждого через `patch --dry-run`
    - собирает (`cmake --build -j$(nproc)`)
    - сохраняет результат в кэш
 6. **Делает бэкап** оригинальных системных файлов (`cache/kicad-X.X.X-original/`)
@@ -143,10 +160,11 @@ staged-сборкой из исходников. После установки `
 patches/
   kicad-9.0.7/          # серия патчей для 9.0.7 (5 штук)
   kicad-9.0.8/          # combined diff для 9.0.8
-  kicad-10.0.4/         # тематическая серия патчей для 10.0.4
+  kicad-10.0.4/         # общие файлы патчей для ветки 10.0.x
+  kicad-10.0.5/         # проверенный порядок патчей для 10.0.5
   standalone/           # независимые патчи (gost, bus-entry)
 scripts/
-  build_and_install.sh       # Debian/Ubuntu: патч → сборка → установка
+  build_and_install_ubuntu.sh       # Debian/Ubuntu: патч → сборка → установка
   build_and_install_arch.sh  # Arch Linux: pacman + /usr/lib layout
   fix_kicad_altium.sh   # устаревший скрипт (только altium-null-byte)
   apply_smooth_zoom_patch.sh  # устаревший скрипт (только smooth-zoom)
@@ -166,8 +184,8 @@ kicad-src/              # gitignored: исходники KiCad (скачиваю
 
 ## Требования
 
-- **ОС:** Ubuntu / Debian (`scripts/build_and_install.sh`) или Arch Linux (`scripts/build_and_install_arch.sh`)
-- **KiCad:** для Debian/Ubuntu — установленный системный KiCad 9.0.x; для Arch — необязательно, установщик сам ставит `kicad`, `kicad-library`, `kicad-library-3d`
+- **ОС:** Ubuntu / Debian (`scripts/build_and_install_ubuntu.sh`) или Arch Linux (`scripts/build_and_install_arch.sh`)
+- **KiCad:** для Debian/Ubuntu — установленный системный KiCad либо явный `--version`; для Arch — необязательно, установщик сам ставит `kicad`, `kicad-library`, `kicad-library-3d`
 - **Для сборки:** `cmake`, `ninja-build`, `g++`, `git`, `patch`  
   + dev-пакеты KiCad (см. [официальный BUILD.md](https://gitlab.com/kicad/code/kicad/-/blob/master/BUILD.md))
 - **`sudo`:** для записи в системную директорию KiCad

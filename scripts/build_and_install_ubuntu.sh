@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# build_and_install.sh — Применение патчей KiCad, сборка и установка
+# build_and_install_ubuntu.sh — Применение патчей KiCad, сборка и установка
 # ============================================================================
 #
 # Определяет установленную версию KiCad, находит подходящие патчи,
@@ -8,18 +8,18 @@
 # собранных артефактов для быстрой повторной установки.
 #
 # Использование:
-#   ./scripts/build_and_install.sh                    # авто-определение версии
-#   ./scripts/build_and_install.sh --version 9.0.7    # явная версия
-#   ./scripts/build_and_install.sh --check            # dry-run, ничего не меняет
-#   ./scripts/build_and_install.sh --from-cache       # только из кэша (без сборки)
-#   ./scripts/build_and_install.sh --rebuild          # пересобрать, игнорируя кэш
-#   ./scripts/build_and_install.sh --build-only       # собрать в кэш без установки
-#   ./scripts/build_and_install.sh --update-libraries # обновить официальные библиотеки KiCad через apt
-#   ./scripts/build_and_install.sh -v 10.0.4 --rebuild # мягко обновить KiCad до 10.0.4
-#   ./scripts/build_and_install.sh --restore          # откат к оригинальным файлам
-#   ./scripts/build_and_install.sh --list-cache       # показать кэш
-#   ./scripts/build_and_install.sh --clean-cache      # очистить кэш
-#   ./scripts/build_and_install.sh -j 8               # потоки сборки
+#   ./scripts/build_and_install_ubuntu.sh                    # авто-определение версии
+#   ./scripts/build_and_install_ubuntu.sh --version 9.0.7    # явная версия
+#   ./scripts/build_and_install_ubuntu.sh --check            # dry-run, ничего не меняет
+#   ./scripts/build_and_install_ubuntu.sh --from-cache       # только из кэша (без сборки)
+#   ./scripts/build_and_install_ubuntu.sh --rebuild          # пересобрать, игнорируя кэш
+#   ./scripts/build_and_install_ubuntu.sh --build-only       # собрать в кэш без установки
+#   ./scripts/build_and_install_ubuntu.sh --update-libraries # обновить официальные библиотеки KiCad через apt
+#   ./scripts/build_and_install_ubuntu.sh -v 10.0.5 --rebuild # мягко обновить KiCad до 10.0.5
+#   ./scripts/build_and_install_ubuntu.sh --restore          # откат к оригинальным файлам
+#   ./scripts/build_and_install_ubuntu.sh --list-cache       # показать кэш
+#   ./scripts/build_and_install_ubuntu.sh --clean-cache      # очистить кэш
+#   ./scripts/build_and_install_ubuntu.sh -j 8               # потоки сборки
 #
 # ============================================================================
 
@@ -227,7 +227,7 @@ offer_release_ppa_if_needed() {
 show_help() {
     cat << 'EOF'
 ┌─────────────────────────────────────────────────────────────────────────┐
-│           build_and_install.sh — KiCad patch builder & installer        │
+│           build_and_install_ubuntu.sh — KiCad patch builder & installer        │
 └─────────────────────────────────────────────────────────────────────────┘
 
   Определяет версию установленного KiCad, находит патчи, собирает из
@@ -235,7 +235,7 @@ show_help() {
   При повторном запуске с теми же патчами использует кэш (секунды вместо часов).
 
 ИСПОЛЬЗОВАНИЕ:
-  ./scripts/build_and_install.sh [ОПЦИИ]
+  ./scripts/build_and_install_ubuntu.sh [ОПЦИИ]
 
 ОПЦИИ:
   -v, --version X.X.X  Явно задать версию KiCad (по умолчанию: авто)
@@ -270,19 +270,19 @@ show_help() {
                Добавление KiCad release PPA: ask/1/0 (по умолчанию: ask)
 
 ПРИМЕРЫ:
-  ./scripts/build_and_install.sh --check         # что будет установлено?
-  ./scripts/build_and_install.sh                 # полная сборка + установка
-  ./scripts/build_and_install.sh --from-cache    # быстрая установка из кэша
-  ./scripts/build_and_install.sh -v 10.0.4 --check
-                                                # проверить патчи на чистой 10.0.4
-  ./scripts/build_and_install.sh -v 10.0.4 --build-only --rebuild
-                                                # собрать 10.0.4 в кэш без sudo
-  ./scripts/build_and_install.sh -v 10.0.4 --from-cache --update-libraries
+  ./scripts/build_and_install_ubuntu.sh --check         # что будет установлено?
+  ./scripts/build_and_install_ubuntu.sh                 # полная сборка + установка
+  ./scripts/build_and_install_ubuntu.sh --from-cache    # быстрая установка из кэша
+  ./scripts/build_and_install_ubuntu.sh -v 10.0.5 --check
+                                                # проверить патчи на чистой 10.0.5
+  ./scripts/build_and_install_ubuntu.sh -v 10.0.5 --build-only --rebuild
+                                                # собрать 10.0.5 в кэш без sudo
+  ./scripts/build_and_install_ubuntu.sh -v 10.0.5 --from-cache --update-libraries
                                                 # обновить библиотеки и поставить кэш
-  ./scripts/build_and_install.sh -v 10.0.4 --rebuild
-                                                # собрать и установить 10.0.4 с патчами
-  ./scripts/build_and_install.sh --restore       # откат
-  ./scripts/build_and_install.sh -v 9.0.7 -j 16 # явная версия, 16 потоков
+  ./scripts/build_and_install_ubuntu.sh -v 10.0.5 --rebuild
+                                                # собрать и установить 10.0.5 с патчами
+  ./scripts/build_and_install_ubuntu.sh --restore       # откат
+  ./scripts/build_and_install_ubuntu.sh -v 9.0.7 -j 16 # явная версия, 16 потоков
 
 EOF
 }
@@ -409,7 +409,7 @@ update_library_packages_if_requested() {
 check_not_root() {
     if [[ $EUID -eq 0 ]]; then
         warn "Скрипт запущен от root. Запускайте без sudo:"
-        warn "  ./scripts/build_and_install.sh"
+        warn "  ./scripts/build_and_install_ubuntu.sh"
         warn "sudo будет запрошен только для шага установки."
         echo ""
         ask "Продолжить всё равно? [y/N]: "
@@ -853,23 +853,8 @@ prepare_source() {
     ok "Исходники готовы: $SRC_DIR"
 }
 
-source_dir_version() {
-    local src="$1"
-
-    [[ -f "$src/.kicad_source_version" ]] || return 1
-    tr -d '[:space:]' < "$src/.kicad_source_version"
-}
-
 prepare_patch_check_source() {
     local version="$1"
-    local check_src="$SRC_DIR"
-
-    if [[ -d "$check_src" && "$(source_dir_version "$check_src" 2>/dev/null || true)" == "$version" ]]; then
-        log "Dry-run использует текущие исходники: $check_src"
-        PATCH_CHECK_SRC="$check_src"
-        PATCH_CHECK_TMP=""
-        return
-    fi
 
     header "Исходники для dry-run KiCad $version"
     download_source_archive "$version"
@@ -892,6 +877,7 @@ apply_patches() {
     while IFS= read -r p; do patches+=("$p"); done < <(list_patches "$patch_dir")
 
     [[ ${#patches[@]} -eq 0 ]] && die "Нет патчей в $patch_dir"
+    command -v git &>/dev/null || die "Для проверки структуры патчей требуется git"
 
     log "Найдено патчей: ${#patches[@]}"
     echo ""
@@ -904,10 +890,14 @@ apply_patches() {
         local check_args=(-p1 --directory="$src" --dry-run)
         local apply_args=(-p1 --directory="$src" --forward)
 
+        if ! git apply --numstat "$p" &>/dev/null; then
+            echo -e "${RED}✗${NC}"
+            git apply --numstat "$p" 2>&1 | tail -10 || true
+            die "Повреждённая структура патча: $name"
+        fi
+
         if patch "${check_args[@]}" < "$p" &>/dev/null 2>&1; then
-            if $dry; then
-                echo -e "${GREEN}✓${NC}"
-            elif patch "${apply_args[@]}" < "$p" &>/dev/null 2>&1; then
+            if patch "${apply_args[@]}" < "$p" &>/dev/null 2>&1; then
                 echo -e "${GREEN}✓${NC}"
             else
                 echo -e "${RED}✗${NC}"
@@ -918,8 +908,8 @@ apply_patches() {
             echo -e "${YELLOW}уже применён${NC}"
         elif $dry; then
             echo -e "${RED}✗${NC}"
-            warn "Патч несовместим: $name"
-            warn "Возможно, версия KiCad не совпадает."
+            patch -p1 --directory="$src" --dry-run < "$p" 2>&1 | tail -10 || true
+            die "Патч несовместим: $name"
         else
             echo -e "${RED}✗${NC}"
             patch -p1 --directory="$src" --dry-run < "$p" 2>&1 | tail -10 || true
@@ -1119,7 +1109,7 @@ install_from_cache() {
     header "Установка в систему"
 
     if [[ ! -d "$stage_root/bin" ]]; then
-        die "Кэш старого формата или повреждён: $cache_install\nПересоберите: ./scripts/build_and_install.sh --rebuild"
+        die "Кэш старого формата или повреждён: $cache_install\nПересоберите: ./scripts/build_and_install_ubuntu.sh --rebuild"
     fi
 
     local cache_bin="$stage_root/bin"
@@ -1400,7 +1390,7 @@ verify_installation() {
         if echo "$result" | grep -qiE "(error|crash|exception|Unable to convert)"; then
             echo -e "${RED}✗${NC}"
             warn "Вывод: $(echo "$result" | grep -iE "(error|crash)" | head -3)"
-            warn "Altium-импорт не работает. Откатите: ./scripts/build_and_install.sh --restore"
+            warn "Altium-импорт не работает. Откатите: ./scripts/build_and_install_ubuntu.sh --restore"
         else
             echo -e "${GREEN}✓${NC}"
         fi
@@ -1540,7 +1530,7 @@ main() {
     fi
 
     if $MODE_FROM_CACHE && [[ ! -d "$cache_install" ]]; then
-        die "Кэш не найден: $cache_install\nСначала соберите: ./scripts/build_and_install.sh --version $version --build-only --rebuild"
+        die "Кэш не найден: $cache_install\nСначала соберите: ./scripts/build_and_install_ubuntu.sh --version $version --build-only --rebuild"
     fi
 
     # ── 6. Показать план (dry-run) ──
@@ -1590,7 +1580,7 @@ main() {
         ok "Сборка сохранена в кэше: $cache_install"
         echo ""
         echo "  Установка из кэша:"
-        echo "    ./scripts/build_and_install.sh --version $version --from-cache"
+        echo "    ./scripts/build_and_install_ubuntu.sh --version $version --from-cache"
         echo ""
         exit 0
     fi
@@ -1612,8 +1602,8 @@ main() {
     echo -e "${GREEN}${BOLD}  Патчи KiCad $version успешно установлены!${NC}"
     echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
-    echo "  Откат:          ./scripts/build_and_install.sh --restore"
-    echo "  Кэш:            ./scripts/build_and_install.sh --list-cache"
+    echo "  Откат:          ./scripts/build_and_install_ubuntu.sh --restore"
+    echo "  Кэш:            ./scripts/build_and_install_ubuntu.sh --list-cache"
     echo ""
 }
 

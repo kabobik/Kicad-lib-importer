@@ -1,0 +1,19 @@
+# KiCad 10.0.5 reuses the patch-release-compatible 10.0.4 files.
+# 0001 is omitted because KiCad 10.0.5 already contains the interline fix.
+../kicad-10.0.4/30-lib-tree/0002-library-tree-group-by-column.patch
+../kicad-10.0.4/10-schematic/0003-smooth-drag-zoom.patch
+../kicad-10.0.4/10-schematic/0004-bus-entry-size-properties.patch
+../kicad-10.0.4/10-schematic/0005-auto-bus-entry.patch
+../kicad-10.0.4/00-core/0006-database-empty-reference-field.patch
+../kicad-10.0.4/20-project-tree/0007-project-tree-extra-files.patch
+10-schematic/0008-schematic-page-background.patch
+../kicad-10.0.4/40-symbol-sidebar/0009-symbol-library-sidebar.patch
+30-lib-tree/0010-lib-tree-multigroup-model.patch
+../kicad-10.0.4/30-lib-tree/0011-lib-tree-grouping-ui.patch
+../kicad-10.0.4/30-lib-tree/0012-symbol-tree-display-cleanup.patch
+../kicad-10.0.4/30-lib-tree/0013-symbol-tree-compact-display.patch
+../kicad-10.0.4/30-lib-tree/0014-lib-tree-expanded-state.patch
+../kicad-10.0.4/30-lib-tree/0015-lib-tree-display-columns.patch
+../kicad-10.0.4/30-lib-tree/0016-lib-tree-grouping-reorder.patch
+../kicad-10.0.4/30-lib-tree/0017-lib-tree-compact-font-drag-place.patch
+../kicad-10.0.4/40-symbol-sidebar/0018-symbol-sidebar-resizable-preview.patch
