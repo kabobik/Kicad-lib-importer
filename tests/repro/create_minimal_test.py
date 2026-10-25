@@ -71,141 +71,71 @@ def pad_to(data, boundary):
 
 
 def create_minimal_schlib(data_stream, pinfrac_stream, component_name, output_path):
+    """Write a CFB v3 library, including the required Altium FileHeader.
+
+    Data and PinFrac are preserved verbatim so the binary null-byte regression
+    reaches ReadProperties instead of failing earlier in ParseLibHeader.
+    This small fixture writer supports streams below the 4096-byte cutoff.
     """
-    Create a minimal CFB v3 .SchLib file with one component.
-    
-    Layout:
-      Header (512 bytes)
-      Sector 0: FAT
-      Sector 1: Directory (4 entries)
-      Sector 2: Mini-FAT
-      Sector 3+: Mini-stream data (Root Entry stream)
-    """
-    # ── Build mini-stream (concatenation of all small streams) ──
+    properties = (
+        b"|HEADER=Protel for Windows - Schematic Library Editor Binary File Version 5.0"
+        b"|Weight=1|MinorVersion=9|UniqueID=TEST0001|\x00"
+    )
+    file_header = struct.pack('<I', len(properties)) + properties
+    streams = [data_stream, pinfrac_stream, file_header]
+    if any(not stream or len(stream) >= MINI_STREAM_CUTOFF for stream in streams):
+        raise ValueError("Fixture streams must be nonempty and smaller than 4096 bytes")
+
     mini_stream = bytearray()
+    mini_fat_entries = []
+    starts = []
+    for stream in streams:
+        start = len(mini_fat_entries)
+        starts.append(start)
+        count = (len(stream) + MINI_SECTOR_SIZE - 1) // MINI_SECTOR_SIZE
+        mini_stream += pad_to(stream, MINI_SECTOR_SIZE)
+        mini_fat_entries.extend(range(start + 1, start + count))
+        mini_fat_entries.append(ENDOFCHAIN)
+    if len(mini_fat_entries) > SECTOR_SIZE // 4:
+        raise ValueError("Fixture exceeds one mini-FAT sector")
+    mini_fat_entries += [FREESECT] * (SECTOR_SIZE // 4 - len(mini_fat_entries))
+    mini_fat = struct.pack('<128I', *mini_fat_entries)
 
-    # Data stream → mini-sectors starting at 0
-    data_start_minisec = 0
-    mini_stream += data_stream
-    mini_stream = bytearray(pad_to(bytes(mini_stream), MINI_SECTOR_SIZE))
-    data_minisecs = (len(data_stream) + MINI_SECTOR_SIZE - 1) // MINI_SECTOR_SIZE
+    # FAT=0, directory=1->2, mini-FAT=3, root mini-stream=4->...
+    root_start = 4
+    root_data = pad_to(bytes(mini_stream), SECTOR_SIZE)
+    root_sectors = len(root_data) // SECTOR_SIZE
+    fat_entries = [FATSECT, 2, ENDOFCHAIN, ENDOFCHAIN]
+    fat_entries += list(range(root_start + 1, root_start + root_sectors)) + [ENDOFCHAIN]
+    fat_entries += [FREESECT] * (SECTOR_SIZE // 4 - len(fat_entries))
+    fat = struct.pack('<128I', *fat_entries)
 
-    # PinFrac stream → mini-sectors starting after Data
-    pinfrac_start_minisec = data_minisecs
-    mini_stream += pinfrac_stream
-    mini_stream = bytearray(pad_to(bytes(mini_stream), MINI_SECTOR_SIZE))
-    pinfrac_minisecs = (len(pinfrac_stream) + MINI_SECTOR_SIZE - 1) // MINI_SECTOR_SIZE
+    # CFB orders sibling names by length, then case-insensitively.
+    header_before_component = (len("FileHeader"), "FILEHEADER") < (
+        len(component_name), component_name.upper())
+    directory = make_dir_entry("Root Entry", 5, child=1,
+                               start=root_start, size=len(mini_stream))
+    directory += make_dir_entry(component_name, 1, child=2,
+                                left=4 if header_before_component else NOSTREAM,
+                                right=NOSTREAM if header_before_component else 4)
+    directory += make_dir_entry("Data", 2, right=3, start=starts[0], size=len(data_stream))
+    directory += make_dir_entry("PinFrac", 2, color=0, start=starts[1], size=len(pinfrac_stream))
+    directory += make_dir_entry("FileHeader", 2, color=0, start=starts[2], size=len(file_header))
+    directory = pad_to(directory, SECTOR_SIZE)
 
-    total_minisecs = data_minisecs + pinfrac_minisecs
-
-    # Pad mini-stream to sector boundary (it's stored as Root Entry's data)
-    mini_stream_padded = pad_to(bytes(mini_stream), SECTOR_SIZE)
-    root_stream_sectors = len(mini_stream_padded) // SECTOR_SIZE
-
-    # ── Build Mini-FAT ──
-    mini_fat = bytearray()
-    # Data chain: 0 → 1 → ... → (data_minisecs-1) → ENDOFCHAIN
-    for i in range(data_minisecs):
-        if i < data_minisecs - 1:
-            struct.pack_into('<I', mini_fat := mini_fat + b'\x00\x00\x00\x00', len(mini_fat) - 4, i + 1)
-        else:
-            struct.pack_into('<I', mini_fat := mini_fat + b'\x00\x00\x00\x00', len(mini_fat) - 4, ENDOFCHAIN)
-    # PinFrac chain
-    for i in range(pinfrac_minisecs):
-        sec = pinfrac_start_minisec + i
-        if i < pinfrac_minisecs - 1:
-            struct.pack_into('<I', mini_fat := mini_fat + b'\x00\x00\x00\x00', len(mini_fat) - 4, sec + 1)
-        else:
-            struct.pack_into('<I', mini_fat := mini_fat + b'\x00\x00\x00\x00', len(mini_fat) - 4, ENDOFCHAIN)
-    # Fill rest of sector with FREESECT
-    while len(mini_fat) < SECTOR_SIZE:
-        mini_fat += struct.pack('<I', FREESECT)
-
-    # ── Sector layout ──
-    # Sector 0: FAT
-    # Sector 1: Directory
-    # Sector 2: Mini-FAT
-    # Sector 3..3+N-1: Root Entry stream (mini-stream container)
-    root_stream_start = 3
-    total_sectors = 3 + root_stream_sectors
-
-    # ── Build FAT ──
-    fat = bytearray()
-    fat += struct.pack('<I', FATSECT)       # Sector 0 = FAT
-    fat += struct.pack('<I', ENDOFCHAIN)    # Sector 1 = Directory (single sector)
-    fat += struct.pack('<I', ENDOFCHAIN)    # Sector 2 = Mini-FAT (single sector)
-    # Root Entry stream chain: 3 → 4 → ... → ENDOFCHAIN
-    for i in range(root_stream_sectors):
-        sec = root_stream_start + i
-        if i < root_stream_sectors - 1:
-            fat += struct.pack('<I', sec + 1)
-        else:
-            fat += struct.pack('<I', ENDOFCHAIN)
-    # Fill rest with FREESECT
-    while len(fat) < SECTOR_SIZE:
-        fat += struct.pack('<I', FREESECT)
-
-    # ── Build Directory ──
-    # Entry 0: Root Entry (storage, child=1, stream data = mini-stream)
-    # Entry 1: component_name (storage, child=2)
-    # Entry 2: "Data" (stream, right_sibling=3)
-    # Entry 3: "PinFrac" (stream)
-    directory = bytearray()
-    directory += make_dir_entry("Root Entry", obj_type=5, color=1,
-                                child=1, start=root_stream_start,
-                                size=len(mini_stream))
-    directory += make_dir_entry(component_name, obj_type=1, color=1,
-                                child=2)
-    directory += make_dir_entry("Data", obj_type=2, color=1,
-                                right=3,
-                                start=data_start_minisec,
-                                size=len(data_stream))
-    directory += make_dir_entry("PinFrac", obj_type=2, color=0,  # red node
-                                start=pinfrac_start_minisec,
-                                size=len(pinfrac_stream))
-    directory = pad_to(bytes(directory), SECTOR_SIZE)
-
-    # ── Build Header ──
     header = bytearray(SECTOR_SIZE)
-    header[0:8] = CFB_MAGIC
-    # CLSID = 0 (16 bytes at 8)
-    struct.pack_into('<H', header, 24, 0x003E)     # minor version
-    struct.pack_into('<H', header, 26, 0x0003)     # major version (v3)
-    struct.pack_into('<H', header, 28, 0xFFFE)     # byte order (LE)
-    struct.pack_into('<H', header, 30, 9)          # sector size power (2^9=512)
-    struct.pack_into('<H', header, 32, 6)          # mini sector size power (2^6=64)
-    # reserved 6 bytes at 34
-    struct.pack_into('<I', header, 40, 0)          # total dir sectors (must be 0 for v3)
-    struct.pack_into('<I', header, 44, 1)          # total FAT sectors
-    struct.pack_into('<I', header, 48, 1)          # first directory sector
-    struct.pack_into('<I', header, 52, 0)          # transaction signature
-    struct.pack_into('<I', header, 56, MINI_STREAM_CUTOFF)  # mini stream cutoff
-    struct.pack_into('<I', header, 60, 2)          # first mini FAT sector
-    struct.pack_into('<I', header, 64, 1)          # total mini FAT sectors
-    struct.pack_into('<I', header, 68, ENDOFCHAIN) # first DIFAT sector (none)
-    struct.pack_into('<I', header, 72, 0)          # total DIFAT sectors
-    # DIFAT array: first entry = sector 0 (our FAT)
-    struct.pack_into('<I', header, 76, 0)
-    # Rest of DIFAT array = FREESECT
-    for i in range(1, 109):
-        struct.pack_into('<I', header, 76 + i * 4, FREESECT)
+    header[:8] = CFB_MAGIC
+    for offset, value in ((24, 0x003E), (26, 3), (28, 0xFFFE), (30, 9), (32, 6)):
+        struct.pack_into('<H', header, offset, value)
+    for offset, value in ((44, 1), (48, 1), (56, MINI_STREAM_CUTOFF),
+                          (60, 3), (64, 1), (68, ENDOFCHAIN), (76, 0)):
+        struct.pack_into('<I', header, offset, value)
+    for index in range(1, 109):
+        struct.pack_into('<I', header, 76 + index * 4, FREESECT)
 
-    # ── Assemble file ──
-    output = bytearray()
-    output += header
-    output += fat
-    output += directory
-    output += mini_fat
-    output += mini_stream_padded
-
-    with open(output_path, 'wb') as f:
-        f.write(output)
-
-    print(f"Created {output_path} ({len(output)} bytes)")
-    print(f"  Component: {component_name}")
-    print(f"  Data stream: {len(data_stream)} bytes ({data_minisecs} mini-sectors)")
-    print(f"  PinFrac stream: {len(pinfrac_stream)} bytes ({pinfrac_minisecs} mini-sectors)")
-    print(f"  Total sectors: {total_sectors}")
+    with open(output_path, 'wb') as output:
+        output.write(header + fat + directory + mini_fat + root_data)
+    print(f"Created {output_path}: {component_name}, Data={len(data_stream)}, PinFrac={len(pinfrac_stream)}")
 
 
 def create_synthetic_data():
@@ -323,7 +253,8 @@ def create_synthetic_data():
         rec += struct.pack('B', len(idx_str)) + idx_str
         rec += struct.pack('<I', len(compressed)) + compressed
 
-        rec_bytes = bytes(rec) + b'\x00'  # trailing null byte
+        # Binary records have no string terminator: the final 0x00 belongs to zlib.
+        rec_bytes = bytes(rec)
         pinfrac += struct.pack('<I', len(rec_bytes) | 0x01000000)
         pinfrac += rec_bytes
 

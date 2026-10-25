@@ -79,6 +79,26 @@
 ./scripts/build_and_install_ubuntu.sh --version 10.0.5 --from-cache --update-libraries
 ```
 
+## kicad-10.0.7/
+
+Актуальная стабильная серия на 25 октября 2026: 17 патчей `0002..0018`.
+Патчи `0008` и `0009` обновлены под контекст 10.0.7, остальные переиспользуются
+через `series`. Исправления GOST и Altium остаются исключёнными: upstream
+уже устранил соответствующие причины ошибок.
+
+Серия также применяется без fuzz к ветке `10.0` на коммите `4e7360bc6f23`.
+[Подробная сверка и результаты проверки](kicad-10.0.7/README.md).
+
+```bash
+./scripts/build_and_install_arch.sh --version 10.0.7 --check
+./scripts/build_and_install_arch.sh --version 10.0.7 --build-only --rebuild
+./scripts/build_and_install_arch.sh --version 10.0.7 --from-cache
+
+./scripts/build_and_install_ubuntu.sh --version 10.0.7 --check
+./scripts/build_and_install_ubuntu.sh --version 10.0.7 --build-only --rebuild
+./scripts/build_and_install_ubuntu.sh --version 10.0.7 --from-cache --update-libraries
+```
+
 ## standalone/
 
 Самостоятельные патчи, не привязанные к конкретной версии.

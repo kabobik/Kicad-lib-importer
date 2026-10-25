@@ -29,6 +29,7 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
 # Paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+source "$SCRIPT_DIR/lib/kicad_installer_common.sh"
 PATCHES_DIR="$PROJECT_DIR/patches"
 CACHE_DIR="${CACHE_DIR:-$PROJECT_DIR/cache}"
 SOURCE_CACHE_DIR="${SOURCE_CACHE_DIR:-$CACHE_DIR/sources}"
@@ -36,7 +37,7 @@ SRC_DIR="${SRC_DIR:-$PROJECT_DIR/kicad-src-arch}"
 KICAD_REPO="${KICAD_REPO:-https://gitlab.com/kicad/code/kicad.git}"
 KICAD_SOURCE_URL_TEMPLATE="${KICAD_SOURCE_URL_TEMPLATE:-https://gitlab.com/kicad/code/kicad/-/archive/%VERSION%/kicad-%VERSION%.tar.gz}"
 JOBS=$(nproc 2>/dev/null || echo 4)
-CACHE_FORMAT_VERSION=arch-1
+CACHE_FORMAT_VERSION=arch-2
 
 # Arch KiCad package layout
 KICAD_INSTALL_PREFIX="${KICAD_INSTALL_PREFIX:-/usr}"
@@ -172,6 +173,10 @@ WHAT THE INSTALLER INSTALLS THROUGH PACMAN:
   kicad-library       symbols, footprints, templates
   kicad-library-3d    3D models
 
+Package installation uses pacman -Syu --needed: databases are refreshed and
+a full system upgrade is proposed. Review pacman's transaction confirmation.
+Cached binaries are checked again after package updates, before system copying.
+
 EXAMPLES:
   ./scripts/build_and_install_arch.sh --check
   ./scripts/build_and_install_arch.sh
@@ -258,6 +263,13 @@ report_arch_packages() {
     echo ""
 }
 
+install_arch_packages() {
+    log "Refreshing package databases and performing a full system upgrade (pacman -Syu)."
+    log "Review the transaction in pacman's confirmation prompt."
+    run_sudo pacman -Syu --needed "$@" \
+        || die "Package transaction failed. Check mirror synchronization if HTTP 404 persists; no patched files were installed."
+}
+
 install_arch_runtime_if_needed() {
     local target_version="$1"
     local missing=()
@@ -288,10 +300,10 @@ install_arch_runtime_if_needed() {
 
     if [[ ${#missing[@]} -gt 0 ]]; then
         log "Installing KiCad base package and official libraries through pacman..."
-        run_sudo pacman -S --needed "${ARCH_RUNTIME_PACKAGES[@]}"
+        install_arch_packages "${ARCH_RUNTIME_PACKAGES[@]}"
     else
         log "Refreshing official KiCad library packages through pacman --needed..."
-        run_sudo pacman -S --needed kicad-library kicad-library-3d
+        install_arch_packages kicad-library kicad-library-3d
     fi
 
     ok "Arch KiCad base/libraries are present"
@@ -349,10 +361,10 @@ check_build_deps() {
     ask "Install missing build dependencies through pacman? [Y/n]: "
     read -r answer
     if [[ "${answer,,}" == "n" ]]; then
-        die "Install manually: sudo pacman -S --needed ${unique_missing[*]}"
+        die "Install manually: sudo pacman -Syu --needed ${unique_missing[*]}"
     fi
 
-    run_sudo pacman -S --needed "${unique_missing[@]}"
+    install_arch_packages "${unique_missing[@]}"
     ok "Build dependencies are installed"
 }
 
@@ -686,8 +698,8 @@ apply_patches() {
         name=$(basename "$patch_file")
         printf "  ${DIM}%-56s${NC} " "$name"
 
-        local check_args=(-p1 --directory="$src" --dry-run)
-        local apply_args=(-p1 --directory="$src" --forward)
+        local check_args=(--batch --forward -p1 --directory="$src" --dry-run)
+        local apply_args=(--batch -p1 --directory="$src" --forward)
 
         if ! git apply --numstat "$patch_file" >/dev/null 2>&1; then
             echo -e "${RED}fail${NC}"
@@ -703,15 +715,15 @@ apply_patches() {
                 patch "${apply_args[@]}" < "$patch_file" 2>&1 | tail -10 || true
                 die "Patch passed dry-run but failed to apply: $name"
             fi
-        elif patch -R -p1 --directory="$src" --dry-run < "$patch_file" >/dev/null 2>&1; then
+        elif patch --batch --forward -R -p1 --directory="$src" --dry-run < "$patch_file" >/dev/null 2>&1; then
             echo -e "${YELLOW}already applied${NC}"
         elif $dry; then
             echo -e "${RED}fail${NC}"
-            patch -p1 --directory="$src" --dry-run < "$patch_file" 2>&1 | tail -10 || true
+            patch --batch --forward -p1 --directory="$src" --dry-run < "$patch_file" 2>&1 | tail -10 || true
             die "Patch is incompatible: $name"
         else
             echo -e "${RED}fail${NC}"
-            patch -p1 --directory="$src" --dry-run < "$patch_file" 2>&1 | tail -10 || true
+            patch --batch --forward -p1 --directory="$src" --dry-run < "$patch_file" 2>&1 | tail -10 || true
             die "Patch failed: $name"
         fi
     done
@@ -720,6 +732,10 @@ apply_patches() {
 
 build_kicad() {
     local src="$1" stage_dir="$2"
+
+    # Source archives live inside this repository; do not use its Git version.
+    local GIT_CEILING_DIRECTORIES="$PROJECT_DIR"
+    export GIT_CEILING_DIRECTORIES
 
     header "Build KiCad"
     log "Source:    $src"
@@ -1028,35 +1044,9 @@ verify_installation() {
 
     header "Verification"
 
-    local cli
-    cli=$(command -v kicad-cli 2>/dev/null || true)
-    [[ -n "$cli" ]] || cli="$SYSTEM_BIN_DIR/kicad-cli"
+    local cli="$SYSTEM_BIN_DIR/kicad-cli"
 
-    if [[ ! -x "$cli" ]]; then
-        warn "kicad-cli not found; skipping functional checks"
-        return
-    fi
-    ok "kicad-cli: $cli"
-
-    local verify_home
-    verify_home=$(mktemp -d /tmp/kicad-arch-verify.XXXXXX)
-    mkdir -p "$verify_home/config" "$verify_home/cache" "$verify_home/data"
-
-    local cli_version
-    cli_version=$(env XDG_CONFIG_HOME="$verify_home/config" \
-        XDG_CACHE_HOME="$verify_home/cache" \
-        XDG_DATA_HOME="$verify_home/data" \
-        "$cli" version 2>&1 | tail -1 || true)
-
-    if [[ "$cli_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-        ok "kicad-cli version: $cli_version"
-        if [[ -n "$expected_version" && "$cli_version" != "$expected_version"* ]]; then
-            rm -rf "$verify_home"
-            die "Expected KiCad $expected_version, got: $cli_version"
-        fi
-    else
-        warn "Could not read kicad-cli version confidently: $cli_version"
-    fi
+    verify_cli "$cli" "$expected_version" || die "KiCad CLI verification failed"
 
     local bad=0 file_path
     for file_path in "$SYSTEM_BIN_DIR"/*.kiface; do
@@ -1104,7 +1094,7 @@ verify_installation() {
     local common_lib
     common_lib=$(find "$SYSTEM_LIB_DIR" -maxdepth 1 -name 'libkicommon.so*' -type f 2>/dev/null | sort -V | tail -1)
     if [[ -n "$common_lib" && -f "$common_lib" ]]; then
-        if grep -a -q "$CACHE_DIR" "$common_lib"; then
+        if runtime_data_path_is_cached "$common_lib"; then
             err "libkicommon contains a cache path; runtime resources may be wrong"
             ((resource_errors+=1))
         elif grep -a -q "$KICAD_DATA_DIR" "$common_lib"; then
@@ -1114,24 +1104,6 @@ verify_installation() {
         fi
     fi
 
-    local tests_dir test_file result
-    tests_dir="$PROJECT_DIR/tests/fixtures"
-    test_file="$tests_dir/Attiny-test.SchLib"
-    if [[ -f "$test_file" ]]; then
-        printf "  %-44s " "Altium import (Attiny-test.SchLib)..."
-        result=$(env XDG_CONFIG_HOME="$verify_home/config" \
-            XDG_CACHE_HOME="$verify_home/cache" \
-            XDG_DATA_HOME="$verify_home/data" \
-            "$cli" sym upgrade "$test_file" -o /dev/null --force 2>&1) || true
-        if echo "$result" | grep -qiE "(error|crash|exception|Unable to convert)"; then
-            echo -e "${RED}fail${NC}"
-            warn "Output: $(echo "$result" | grep -iE "(error|crash|exception|Unable to convert)" | head -3)"
-        else
-            echo -e "${GREEN}ok${NC}"
-        fi
-    fi
-
-    rm -rf "$verify_home"
     [[ $resource_errors -eq 0 ]] || die "KiCad resource verification failed"
     ok "Verification finished"
 }
@@ -1165,6 +1137,7 @@ EOF
 main() {
     parse_args "$@"
     check_arch_host
+    validate_build_args
     check_not_root
 
     echo -e "${BOLD}"
@@ -1203,7 +1176,7 @@ main() {
     local cache_install
     cache_install=$(cache_install_dir "$version" "$hash")
 
-    if [[ -d "$cache_install" ]] && ! $MODE_REBUILD; then
+    if cache_is_complete "$cache_install" "$version" "$hash" && ! $MODE_REBUILD; then
         echo ""
         ok "Cache found: $cache_install"
         if [[ -f "$cache_install/.meta" ]]; then
@@ -1220,8 +1193,8 @@ main() {
         fi
     fi
 
-    if $MODE_FROM_CACHE && [[ ! -d "$cache_install" ]]; then
-        die "Cache not found: $cache_install"
+    if $MODE_FROM_CACHE && ! cache_is_complete "$cache_install" "$version" "$hash"; then
+        die "Cache is missing or incomplete: $cache_install"
     fi
 
     if $MODE_CHECK; then
@@ -1230,7 +1203,7 @@ main() {
         echo "  Patches:        $patch_dir"
         echo "  Patch hash:     $hash"
         echo "  Cache:          $cache_install"
-        [[ -d "$cache_install" ]] && echo "  Cache status:   ready" || echo "  Cache status:   build needed"
+        cache_is_complete "$cache_install" "$version" "$hash" && echo "  Cache status:   ready" || echo "  Cache status:   build needed"
         echo ""
 
         report_arch_packages
@@ -1247,7 +1220,7 @@ main() {
         install_arch_runtime_if_needed "$version"
     fi
 
-    if [[ ! -d "$cache_install" ]] || $MODE_REBUILD; then
+    if ! cache_is_complete "$cache_install" "$version" "$hash" || $MODE_REBUILD; then
         [[ -d "$cache_install" ]] && rm -rf "$cache_install"
         mkdir -p "$cache_install"
 
@@ -1255,6 +1228,9 @@ main() {
         prepare_source "$version"
         apply_patches "$SRC_DIR" "$patch_dir" false
         build_kicad "$SRC_DIR" "$cache_install"
+        verify_cli "$cache_install$KICAD_INSTALL_PREFIX/bin/kicad-cli" "$version" \
+            "$cache_install$KICAD_LIB_DIR" "$cache_install$KICAD_DATA_DIR" \
+            || die "Staged KiCad verification failed"
         save_cache_meta "$cache_install" "$version" "$hash" "$patch_dir"
     else
         ok "Using cache; rebuild is not needed"
@@ -1274,6 +1250,12 @@ main() {
     [[ -n "$system_kicad" ]] || die "System KiCad bin directory not found"
     log "System KiCad bin directory: $system_kicad"
 
+    # A system upgrade may change dependency SONAMEs after this cache was built.
+    # Load the staged schematic kiface before replacing any system files.
+    verify_cli "$cache_install$KICAD_INSTALL_PREFIX/bin/kicad-cli" "$version" \
+        "$cache_install$KICAD_LIB_DIR" "$cache_install$KICAD_DATA_DIR" \
+        || die "Cached KiCad is incompatible with the current system. Rebuild with --version $version --rebuild."
+
     backup_originals "$version" "$cache_install"
     install_from_cache "$cache_install"
     verify_installation "$version"
@@ -1290,4 +1272,6 @@ main() {
     echo ""
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

@@ -32,6 +32,7 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
 # ── Пути ──────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+source "$SCRIPT_DIR/lib/kicad_installer_common.sh"
 PATCHES_DIR="$PROJECT_DIR/patches"
 CACHE_DIR="${CACHE_DIR:-$PROJECT_DIR/cache}"
 SOURCE_CACHE_DIR="${SOURCE_CACHE_DIR:-$CACHE_DIR/sources}"
@@ -39,7 +40,7 @@ SRC_DIR="${SRC_DIR:-$PROJECT_DIR/kicad-src}"
 KICAD_REPO="${KICAD_REPO:-https://gitlab.com/kicad/code/kicad.git}"
 KICAD_SOURCE_URL_TEMPLATE="${KICAD_SOURCE_URL_TEMPLATE:-https://gitlab.com/kicad/code/kicad/-/archive/%VERSION%/kicad-%VERSION%.tar.gz}"
 JOBS=$(nproc 2>/dev/null || echo 4)
-CACHE_FORMAT_VERSION=5
+CACHE_FORMAT_VERSION=6
 KICAD_INSTALL_PREFIX="${KICAD_INSTALL_PREFIX:-/usr}"
 MULTIARCH="$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || echo x86_64-linux-gnu)"
 KICAD_INSTALL_LIBDIR="${KICAD_INSTALL_LIBDIR:-lib/$MULTIARCH}"
@@ -422,7 +423,9 @@ check_not_root() {
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -v|--version)  KICAD_VERSION_OVERRIDE="$2"; shift 2 ;;
+            -v|--version)
+                [[ $# -ge 2 ]] || die "$1 requires a version"
+                KICAD_VERSION_OVERRIDE="$2"; shift 2 ;;
             --check)       MODE_CHECK=true; shift ;;
             --from-cache)  MODE_FROM_CACHE=true; shift ;;
             --rebuild)     MODE_REBUILD=true; shift ;;
@@ -431,7 +434,9 @@ parse_args() {
             --restore)     MODE_RESTORE=true; shift ;;
             --list-cache)  list_cache; exit 0 ;;
             --clean-cache) clean_cache; exit 0 ;;
-            -j|--jobs)     JOBS="$2"; shift 2 ;;
+            -j|--jobs)
+                [[ $# -ge 2 ]] || die "$1 requires a number"
+                JOBS="$2"; shift 2 ;;
             -h|--help)     show_help; exit 0 ;;
             *) die "Неизвестный аргумент: $1. Используйте --help." ;;
         esac
@@ -887,8 +892,8 @@ apply_patches() {
         name=$(basename "$p")
         printf "  ${DIM}%-50s${NC} " "$name"
 
-        local check_args=(-p1 --directory="$src" --dry-run)
-        local apply_args=(-p1 --directory="$src" --forward)
+        local check_args=(--batch --forward -p1 --directory="$src" --dry-run)
+        local apply_args=(--batch -p1 --directory="$src" --forward)
 
         if ! git apply --numstat "$p" &>/dev/null; then
             echo -e "${RED}✗${NC}"
@@ -904,15 +909,15 @@ apply_patches() {
                 patch "${apply_args[@]}" < "$p" 2>&1 | tail -10 || true
                 die "Патч прошёл dry-run, но не применился: $name"
             fi
-        elif patch -R -p1 --directory="$src" --dry-run < "$p" &>/dev/null 2>&1; then
+        elif patch --batch --forward -R -p1 --directory="$src" --dry-run < "$p" &>/dev/null 2>&1; then
             echo -e "${YELLOW}уже применён${NC}"
         elif $dry; then
             echo -e "${RED}✗${NC}"
-            patch -p1 --directory="$src" --dry-run < "$p" 2>&1 | tail -10 || true
+            patch --batch --forward -p1 --directory="$src" --dry-run < "$p" 2>&1 | tail -10 || true
             die "Патч несовместим: $name"
         else
             echo -e "${RED}✗${NC}"
-            patch -p1 --directory="$src" --dry-run < "$p" 2>&1 | tail -10 || true
+            patch --batch --forward -p1 --directory="$src" --dry-run < "$p" 2>&1 | tail -10 || true
             die "Патч не применился: $name"
         fi
     done
@@ -922,6 +927,10 @@ apply_patches() {
 # ── Сборка KiCad ─────────────────────────────────────────────────────────
 build_kicad() {
     local src="$1" stage_dir="$2"
+
+    # Source archives live inside this repository; do not use its Git version.
+    local GIT_CEILING_DIRECTORIES="$PROJECT_DIR"
+    export GIT_CEILING_DIRECTORIES
 
     header "Сборка KiCad"
     log "Источник:  $src"
@@ -1291,33 +1300,8 @@ verify_installation() {
     header "Верификация"
 
     # 1. Проверяем что kicad-cli доступен
-    local cli
-    cli=$(command -v kicad-cli 2>/dev/null || find /usr/bin /usr/local/bin -name "kicad-cli" 2>/dev/null | head -1)
-    if [[ -z "$cli" ]]; then
-        warn "kicad-cli не найден, пропускаем функциональную проверку"
-        return
-    fi
-    ok "kicad-cli: $cli"
-
-    local verify_home
-    verify_home=$(mktemp -d /tmp/kicad-verify.XXXXXX)
-    mkdir -p "$verify_home/config" "$verify_home/cache" "$verify_home/data"
-    local cli_env=( env
-        XDG_CONFIG_HOME="$verify_home/config"
-        XDG_CACHE_HOME="$verify_home/cache"
-        XDG_DATA_HOME="$verify_home/data" )
-
-    local cli_version
-    cli_version=$("${cli_env[@]}" "$cli" version 2>&1 | tail -1 || true)
-    if [[ "$cli_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-        ok "Версия kicad-cli: $cli_version"
-
-        if [[ -n "$expected_version" && "$cli_version" != "$expected_version"* ]]; then
-            die "После установки ожидалась версия $expected_version, но kicad-cli показывает: $cli_version"
-        fi
-    else
-        warn "Не удалось уверенно прочитать версию kicad-cli: $cli_version"
-    fi
+    local cli="$system_kicad/kicad-cli"
+    verify_cli "$cli" "$expected_version" || die "KiCad CLI verification failed"
 
     # 2. Проверяем что .kiface файлы — валидные ELF
     local bad=0
@@ -1325,7 +1309,7 @@ verify_installation() {
         [[ -f "$f" ]] || continue
         if ! file "$f" | grep -q "ELF"; then
             err "Повреждён: $(basename "$f")"
-            ((bad++))
+            ((bad+=1))
         fi
     done
     [[ $bad -eq 0 ]] && ok "Все .kiface файлы — валидные ELF" || die "$bad повреждённых файлов после установки"
@@ -1338,7 +1322,7 @@ verify_installation() {
         ok "Локализации найдены: $SYSTEM_SHARE_DIR/kicad/internat"
     else
         err "Не найдены локализации KiCad: $SYSTEM_SHARE_DIR/kicad/internat"
-        ((resource_errors++))
+        ((resource_errors+=1))
     fi
 
     local footprint_count=0 symbol_count=0
@@ -1351,23 +1335,23 @@ verify_installation() {
         ok "Footprint libraries: $footprint_count"
     else
         err "Подозрительно мало footprint libraries: $footprint_count"
-        ((resource_errors++))
+        ((resource_errors+=1))
     fi
 
     if [[ $symbol_count -gt 50 ]]; then
         ok "Symbol libraries: $symbol_count"
     else
         err "Подозрительно мало symbol libraries: $symbol_count"
-        ((resource_errors++))
+        ((resource_errors+=1))
     fi
 
     local common_lib
     common_lib=$(find "$SYSTEM_LIB_DIR" -maxdepth 1 -name 'libkicommon.so*' -type f 2>/dev/null | sort -V | tail -1)
 
     if [[ -n "$common_lib" && -f "$common_lib" ]]; then
-        if grep -a -q "$CACHE_DIR" "$common_lib"; then
+        if runtime_data_path_is_cached "$common_lib"; then
             err "В libkicommon зашит путь к cache; KiCad будет искать ресурсы не в /usr/share/kicad"
-            ((resource_errors++))
+            ((resource_errors+=1))
         elif grep -a -q "$KICAD_DATA_DIR" "$common_lib"; then
             ok "Runtime data path: $KICAD_DATA_DIR"
         else
@@ -1377,40 +1361,6 @@ verify_installation() {
 
     [[ $resource_errors -eq 0 ]] || die "Проверка KiCad runtime-ресурсов не пройдена"
 
-    # 3. Функциональный тест — импорт тестового файла
-    local tests_dir
-    tests_dir="$(dirname "$SCRIPT_DIR")/tests/fixtures"
-
-    # Тест Altium-импорта (если есть файл)
-    local test_file="$tests_dir/Attiny-test.SchLib"
-    if [[ -f "$test_file" ]]; then
-        printf "  %-40s " "Altium import (Attiny-test.SchLib)..."
-        local result
-        result=$("${cli_env[@]}" "$cli" sym upgrade "$test_file" -o /dev/null --force 2>&1) || true
-        if echo "$result" | grep -qiE "(error|crash|exception|Unable to convert)"; then
-            echo -e "${RED}✗${NC}"
-            warn "Вывод: $(echo "$result" | grep -iE "(error|crash)" | head -3)"
-            warn "Altium-импорт не работает. Откатите: ./scripts/build_and_install_ubuntu.sh --restore"
-        else
-            echo -e "${GREEN}✓${NC}"
-        fi
-    fi
-
-    # Тест null-byte файла (специфичный баг)
-    local nullbyte_file="$tests_dir/test_bug_nullbyte.SchLib"
-    if [[ -f "$nullbyte_file" ]]; then
-        printf "  %-40s " "Null-byte bug (test_bug_nullbyte.SchLib)..."
-        local result
-        result=$("${cli_env[@]}" "$cli" sym upgrade "$nullbyte_file" -o /dev/null --force 2>&1) || true
-        if echo "$result" | grep -qiE "(error|crash|exception|out of range)"; then
-            echo -e "${RED}✗${NC}"
-            warn "Null-byte баг всё ещё присутствует или новая ошибка"
-        else
-            echo -e "${GREEN}✓${NC}"
-        fi
-    fi
-
-    rm -rf "$verify_home"
     ok "Верификация завершена"
 }
 
@@ -1444,6 +1394,7 @@ EOF
 # ── Главный поток ─────────────────────────────────────────────────────────
 main() {
     parse_args "$@"
+    validate_build_args
     check_not_root
 
     if $MODE_BUILD_ONLY && $MODE_UPDATE_LIBRARIES; then
@@ -1482,18 +1433,6 @@ main() {
         exit 0
     fi
 
-    # ── 2.1. Проверить apt-источник целевой ветки KiCad ──
-    if ! $MODE_CHECK && ! $MODE_BUILD_ONLY; then
-        offer_release_ppa_if_needed "$version"
-    fi
-
-    # ── 2.5. Убедиться что базовый KiCad установлен ──
-    if ! $MODE_CHECK && ! $MODE_BUILD_ONLY; then
-        install_kicad_base_if_needed "$version"
-    elif $MODE_BUILD_ONLY; then
-        log "Режим build-only: базовый пакет apt и системная установка не изменяются"
-    fi
-
     # ── 3. Найти патчи ──
     local patch_dir
     patch_dir=$(find_patch_dir "$version") || die "Патчи для KiCad $version не найдены"
@@ -1508,7 +1447,7 @@ main() {
     local cache_install
     cache_install=$(cache_install_dir "$version" "$hash")
 
-    if [[ -d "$cache_install" ]] && ! $MODE_REBUILD; then
+    if cache_is_complete "$cache_install" "$version" "$hash" && ! $MODE_REBUILD; then
         echo ""
         ok "Найден кэш: $cache_install"
         local meta="$cache_install/.meta"
@@ -1529,8 +1468,8 @@ main() {
         fi
     fi
 
-    if $MODE_FROM_CACHE && [[ ! -d "$cache_install" ]]; then
-        die "Кэш не найден: $cache_install\nСначала соберите: ./scripts/build_and_install_ubuntu.sh --version $version --build-only --rebuild"
+    if $MODE_FROM_CACHE && ! cache_is_complete "$cache_install" "$version" "$hash"; then
+        die "Кэш отсутствует или не завершён: $cache_install\nСначала соберите: ./scripts/build_and_install_ubuntu.sh --version $version --build-only --rebuild"
     fi
 
     # ── 6. Показать план (dry-run) ──
@@ -1540,7 +1479,7 @@ main() {
         echo "  Патчи:         $patch_dir"
         echo "  Хэш патчей:    $hash"
         echo "  Кэш:           $cache_install"
-        [[ -d "$cache_install" ]] && echo "  Состояние кэша: ГОТОВ" || echo "  Состояние кэша: нужна сборка"
+        cache_is_complete "$cache_install" "$version" "$hash" && echo "  Состояние кэша: ГОТОВ" || echo "  Состояние кэша: нужна сборка"
         echo ""
 
         prepare_patch_check_source "$version"
@@ -1550,6 +1489,18 @@ main() {
 
         warn "Dry-run завершён. Для реальной установки уберите --check"
         exit 0
+    fi
+
+    # ── 2.1. Проверить apt-источник целевой ветки KiCad ──
+    if ! $MODE_CHECK && ! $MODE_BUILD_ONLY; then
+        offer_release_ppa_if_needed "$version"
+    fi
+
+    # ── 2.5. Убедиться что базовый KiCad установлен ──
+    if ! $MODE_CHECK && ! $MODE_BUILD_ONLY; then
+        install_kicad_base_if_needed "$version"
+    elif $MODE_BUILD_ONLY; then
+        log "Режим build-only: базовый пакет apt и системная установка не изменяются"
     fi
 
     # ── 7. Определить системный путь KiCad ──
@@ -1563,7 +1514,7 @@ main() {
     fi
 
     # ── 8. Собрать если нет в кэше ──
-    if [[ ! -d "$cache_install" ]] || $MODE_REBUILD; then
+    if ! cache_is_complete "$cache_install" "$version" "$hash" || $MODE_REBUILD; then
         [[ -d "$cache_install" ]] && rm -rf "$cache_install"
         mkdir -p "$cache_install"
 
@@ -1571,6 +1522,9 @@ main() {
         prepare_source "$version"
         apply_patches "$SRC_DIR" "$patch_dir" false
         build_kicad "$SRC_DIR" "$cache_install"
+        verify_cli "$cache_install$KICAD_INSTALL_PREFIX/bin/kicad-cli" "$version" \
+            "$cache_install$KICAD_LIB_DIR" "$cache_install$KICAD_DATA_DIR" \
+            || die "Staged KiCad verification failed"
         save_cache_meta "$cache_install" "$version" "$hash" "$patch_dir"
     else
         ok "Используем кэш (пересборка не нужна)"
@@ -1607,5 +1561,6 @@ main() {
     echo ""
 }
 
-main "$@"
-exit $?
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

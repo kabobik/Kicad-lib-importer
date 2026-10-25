@@ -1,7 +1,9 @@
 # KiCad Local Patches
 
 Коллекция патчей для KiCad с автоматической сборкой и установкой.  
-Патчи протестированы на **KiCad 9.0.7**, **9.0.8** и **10.0.5**; для Arch Linux добавлен отдельный установщик.
+Актуальная серия — **KiCad 10.0.7** (стабильный выпуск от 7 октября 2026).
+Сохранены серии для 9.0.7, 9.0.8 и 10.0.1–10.0.5.
+[Результаты сверки с upstream и проверки](patches/kicad-10.0.7/README.md).
 
 ## Патчи
 
@@ -14,6 +16,7 @@
 | `0005-auto-bus-entry-posture-fix` | 9.0.7 | ✅ работает | Исправление posture для авто bus entry |
 | `local-patches-combined` | 9.0.8 | ✅ работает | Все патчи кроме altium-null-byte (уже в upstream) |
 | `0002..0018` | 10.0.5 | ✅ сборка | Полная серия локальных патчей; `0001` уже реализован upstream |
+| `0002..0018` | 10.0.7 | ✅ сборка и CLI | 17 патчей; обновлён контекст `0008` и `0009` |
 | `gost-font-multiline` | standalone | ✅ работает | Фикс integer truncation в `GetInterline()` для GOST-шрифтов |
 | `bus-entry-size-properties` | standalone | ✅ работает | Size X/Y в properties bus entry |
 
@@ -91,7 +94,7 @@ python3 -m venv .venv
 ./scripts/build_and_install_arch.sh
 
 # 3. Явная версия
-./scripts/build_and_install_arch.sh --version 10.0.5 --rebuild
+./scripts/build_and_install_arch.sh --version 10.0.7 --rebuild
 
 # 4. Повторная установка из кэша
 ./scripts/build_and_install_arch.sh --from-cache
@@ -100,41 +103,46 @@ python3 -m venv .venv
 ./scripts/build_and_install_arch.sh --restore
 ```
 
-## Обновление до KiCad 10.0.5
+## Обновление до KiCad 10.0.7
 
 ### Arch Linux
 
 ```bash
-# Проверить, что локальные патчи ложатся на чистую 10.0.5
-./scripts/build_and_install_arch.sh --version 10.0.5 --check
+# Проверить, что локальные патчи ложатся на чистую 10.0.7
+./scripts/build_and_install_arch.sh --version 10.0.7 --check
 
-# Собрать 10.0.5 с локальными патчами в кэш без установки
-./scripts/build_and_install_arch.sh --version 10.0.5 --build-only --rebuild
+# Собрать 10.0.7 с локальными патчами в кэш без установки
+./scripts/build_and_install_arch.sh --version 10.0.7 --build-only --rebuild
 
 # Установить уже собранный кэш поверх текущего KiCad
-./scripts/build_and_install_arch.sh --version 10.0.5 --from-cache
+./scripts/build_and_install_arch.sh --version 10.0.7 --from-cache
 
 # Либо одним шагом: собрать и установить поверх текущего KiCad
-./scripts/build_and_install_arch.sh --version 10.0.5 --rebuild
+./scripts/build_and_install_arch.sh --version 10.0.7 --rebuild
 ```
 
 На Arch скрипт проверяет пакеты через `pacman`, собирает staged-дерево с layout
 `/usr/lib` и после установки сверяет `kicad-cli version` с целевой версией.
+Пакеты ставятся через `pacman -Syu --needed`: обновляются базы и предлагается
+полное обновление системы с обычным подтверждением pacman. Это предотвращает
+загрузку удалённых версий из устаревшей базы (HTTP 404). После обновления
+зависимостей кэш проверяется повторно до копирования в `/usr`; если он больше
+не запускается, установщик остановится и предложит `--rebuild`.
 
 ### Debian / Ubuntu
 
 ```bash
-# Проверить серию на чистом архиве 10.0.5
-./scripts/build_and_install_ubuntu.sh --version 10.0.5 --check
+# Проверить серию на чистом архиве 10.0.7
+./scripts/build_and_install_ubuntu.sh --version 10.0.7 --check
 
 # Собрать в кэш без установки
-./scripts/build_and_install_ubuntu.sh --version 10.0.5 --build-only --rebuild
+./scripts/build_and_install_ubuntu.sh --version 10.0.7 --build-only --rebuild
 
 # Установить подготовленный кэш и обновить официальные библиотеки
-./scripts/build_and_install_ubuntu.sh --version 10.0.5 --from-cache --update-libraries
+./scripts/build_and_install_ubuntu.sh --version 10.0.7 --from-cache --update-libraries
 
 # Либо собрать и установить одним шагом
-./scripts/build_and_install_ubuntu.sh --version 10.0.5 --rebuild --update-libraries
+./scripts/build_and_install_ubuntu.sh --version 10.0.7 --rebuild --update-libraries
 ```
 
 На Debian/Ubuntu установщик проверяет пакеты через `dpkg`/`apt` и использует
@@ -151,8 +159,9 @@ multiarch-layout `/usr/lib/<triplet>`.
    - последовательно применяет патчи после проверки каждого через `patch --dry-run`
    - собирает (`cmake --build -j$(nproc)`)
    - сохраняет результат в кэш
-6. **Делает бэкап** оригинальных системных файлов (`cache/kicad-X.X.X-original/`)
-7. **Устанавливает** из кэша в системную директорию KiCad (требует `sudo`)
+6. **Проверяет сборку**: точную версию CLI и импорт обоих тестовых `.SchLib`; только после успеха записывает `.meta` готового кэша
+7. **Делает бэкап** оригинальных системных файлов (`cache/kicad-X.X.X-original/`)
+8. **Устанавливает** из кэша в системную директорию KiCad (требует `sudo`)
 
 ## Структура проекта
 
@@ -162,6 +171,7 @@ patches/
   kicad-9.0.8/          # combined diff для 9.0.8
   kicad-10.0.4/         # общие файлы патчей для ветки 10.0.x
   kicad-10.0.5/         # проверенный порядок патчей для 10.0.5
+  kicad-10.0.7/         # актуальная стабильная версия; 17 патчей
   standalone/           # независимые патчи (gost, bus-entry)
 scripts/
   build_and_install_ubuntu.sh       # Debian/Ubuntu: патч → сборка → установка
