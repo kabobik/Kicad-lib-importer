@@ -1,0 +1,17 @@
+diff --git a/eeschema/widgets/sch_symbol_library_pane.cpp b/eeschema/widgets/sch_symbol_library_pane.cpp
+--- a/eeschema/widgets/sch_symbol_library_pane.cpp
++++ b/eeschema/widgets/sch_symbol_library_pane.cpp
+@@ -240,6 +240,13 @@ SCH_SYMBOL_LIBRARY_PANE::~SCH_SYMBOL_LIBRARY_PANE()
+ 
+     if( m_adapter )
+         m_adapter->SaveSettings();
++
++    // LIB_TREE unbinds events from the external details window in its destructor.
++    // Destroy it while that window and our adapter are still alive: the splitter
++    // would otherwise destroy the details branch before the tree branch.
++    // Delete synchronously; deferred destruction would outlive these dependencies.
++    delete m_tree;
++    m_tree = nullptr;
+ }
+ 
+ 
