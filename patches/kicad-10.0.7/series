@@ -17,3 +17,4 @@
 ../kicad-10.0.4/30-lib-tree/0017-lib-tree-compact-font-drag-place.patch
 ../kicad-10.0.4/40-symbol-sidebar/0018-symbol-sidebar-resizable-preview.patch
 0019-symbol-sidebar-destruction-order.patch
+0020-annotation-utf8-reference.patch

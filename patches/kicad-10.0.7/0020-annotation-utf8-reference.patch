@@ -1,0 +1,78 @@
+diff --git a/eeschema/sch_reference_list.cpp b/eeschema/sch_reference_list.cpp
+--- a/eeschema/sch_reference_list.cpp
++++ b/eeschema/sch_reference_list.cpp
+@@ -850,7 +850,7 @@
+ 
+         SetRefStr( refText );
+     }
+-    else if( isdigit( refText[ll] ) == 0 )
++    else if( isdigit( static_cast<unsigned char>( refText[ll] ) ) == 0 )
+     {
+         m_isNew = true;
+     }
+@@ -858,13 +858,16 @@
+     {
+         while( ll >= 0 )
+         {
+-            if( (refText[ll] <= ' ' ) || isdigit( refText[ll] ) )
++            // UTF-8 bytes must not become negative and be mistaken for whitespace.
++            const unsigned char ch = static_cast<unsigned char>( refText[ll] );
++
++            if( ch <= ' ' || isdigit( ch ) )
+             {
+                 ll--;
+             }
+             else
+             {
+-                if( isdigit( refText[ll + 1] ) )
++                if( isdigit( static_cast<unsigned char>( refText[ll + 1] ) ) )
+                 {
+                     // null terminated C string into cp
+                     const char* cp = refText.c_str() + ll + 1;
+@@ -892,7 +895,7 @@
+ 
+     int ll = refText.length() - 1;
+ 
+-    return ( refText[ll] == '?' ) || isdigit( refText[ll] );
++    return ( refText[ll] == '?' ) || isdigit( static_cast<unsigned char>( refText[ll] ) );
+ }
+ 
+ 
+diff --git a/qa/tests/eeschema/test_sch_reference_list.cpp b/qa/tests/eeschema/test_sch_reference_list.cpp
+--- a/qa/tests/eeschema/test_sch_reference_list.cpp
++++ b/qa/tests/eeschema/test_sch_reference_list.cpp
+@@ -417,4 +417,34 @@
+ }
+ 
+ 
++BOOST_AUTO_TEST_CASE( SplitUtf8References )
++{
++    for( const wxString& prefix : { wxString::FromUTF8( "С" ), wxString::FromUTF8( "ДД" ),
++                                   wxString::FromUTF8( "Ω" ), wxString::FromUTF8( "電" ),
++                                   wxString::FromUTF8( "RС" ), wxString( "C" ) } )
++    {
++        SCH_REFERENCE ref;
++        wxString fullRef = prefix + "001";
++
++        // Repeated splitting and recombination must not grow the reference.
++        for( int pass = 0; pass < 10; ++pass )
++        {
++            ref.SetRef( fullRef );
++            BOOST_CHECK( ref.IsSplitNeeded() );
++            ref.Split();
++            BOOST_CHECK_EQUAL( ref.GetRef(), prefix );
++            BOOST_CHECK_EQUAL( ref.GetRefNumber(), "001" );
++            BOOST_CHECK( !ref.IsSplitNeeded() );
++            fullRef = ref.GetRef() + ref.GetRefNumber();
++            BOOST_CHECK_EQUAL( fullRef, prefix + "001" );
++        }
++
++        ref.SetRef( prefix + "?" );
++        ref.Split();
++        BOOST_CHECK_EQUAL( ref.GetRef(), prefix );
++        BOOST_CHECK_EQUAL( ref.GetRefNumber(), "?" );
++    }
++}
++
++
+ BOOST_AUTO_TEST_SUITE_END()
