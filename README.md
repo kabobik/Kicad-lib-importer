@@ -1,9 +1,10 @@
 # KiCad Local Patches
 
 Коллекция патчей для KiCad с автоматической сборкой и установкой.  
-Актуальная серия — **KiCad 10.0.7** (стабильный выпуск от 7 октября 2026).
-Сохранены серии для 9.0.7, 9.0.8 и 10.0.1–10.0.5.
-[Результаты сверки с upstream и проверки](patches/kicad-10.0.7/README.md).
+Актуальная серия — **KiCad 10.0.8** (выпуск от 30 октября 2026): 20 патчей,
+включая исправление падения при добавлении библиотеки с открытым редактором.
+Сохранены серии для 9.0.7, 9.0.8, 10.0.1–10.0.5 и 10.0.7.
+[Миграция, исправление и результаты проверок](patches/kicad-10.0.8/README.md).
 
 ## Патчи
 
@@ -16,7 +17,8 @@
 | `0005-auto-bus-entry-posture-fix` | 9.0.7 | ✅ работает | Исправление posture для авто bus entry |
 | `local-patches-combined` | 9.0.8 | ✅ работает | Все патчи кроме altium-null-byte (уже в upstream) |
 | `0002..0018` | 10.0.5 | ✅ сборка | Полная серия локальных патчей; `0001` уже реализован upstream |
-| `0002..0018` | 10.0.7 | ✅ сборка и CLI | 17 патчей; обновлён контекст `0008` и `0009` |
+| `0002..0020` | 10.0.7 | Историческая серия | 19 патчей; исправление кириллических обозначений добавлено после последней сборки |
+| `0002..0021` | 10.0.8 | Проверены применение и тесты | 20 патчей; защита объектов кэша от удаления во время обновления дерева |
 | `gost-font-multiline` | standalone | ✅ работает | Фикс integer truncation в `GetInterline()` для GOST-шрифтов |
 | `bus-entry-size-properties` | standalone | ✅ работает | Size X/Y в properties bus entry |
 
@@ -94,7 +96,7 @@ python3 -m venv .venv
 ./scripts/build_and_install_arch.sh
 
 # 3. Явная версия
-./scripts/build_and_install_arch.sh --version 10.0.7 --rebuild
+./scripts/build_and_install_arch.sh --version 10.0.8 --rebuild
 
 # 4. Повторная установка из кэша
 ./scripts/build_and_install_arch.sh --from-cache
@@ -103,22 +105,26 @@ python3 -m venv .venv
 ./scripts/build_and_install_arch.sh --restore
 ```
 
-## Обновление до KiCad 10.0.7
+## Обновление до KiCad 10.0.8
+
+Оба установщика без `--version` выбирают новейшую поддержанную стабильную
+серию — сейчас 10.0.8. Если подходящего бинарного кэша ещё нет, сначала
+выполните сборку. `--from-cache` не пересобирает старый кэш 10.0.7.
 
 ### Arch Linux
 
 ```bash
-# Проверить, что локальные патчи ложатся на чистую 10.0.7
-./scripts/build_and_install_arch.sh --version 10.0.7 --check
+# Проверить, что локальные патчи ложатся на чистую 10.0.8
+./scripts/build_and_install_arch.sh --version 10.0.8 --check
 
-# Собрать 10.0.7 с локальными патчами в кэш без установки
-./scripts/build_and_install_arch.sh --version 10.0.7 --build-only --rebuild
+# Собрать 10.0.8 с локальными патчами в кэш без установки
+./scripts/build_and_install_arch.sh --version 10.0.8 --build-only --rebuild
 
 # Установить уже собранный кэш поверх текущего KiCad
-./scripts/build_and_install_arch.sh --version 10.0.7 --from-cache
+./scripts/build_and_install_arch.sh --version 10.0.8 --from-cache
 
 # Либо одним шагом: собрать и установить поверх текущего KiCad
-./scripts/build_and_install_arch.sh --version 10.0.7 --rebuild
+./scripts/build_and_install_arch.sh --version 10.0.8 --rebuild
 ```
 
 На Arch скрипт проверяет пакеты через `pacman`, собирает staged-дерево с layout
@@ -132,17 +138,17 @@ python3 -m venv .venv
 ### Debian / Ubuntu
 
 ```bash
-# Проверить серию на чистом архиве 10.0.7
-./scripts/build_and_install_ubuntu.sh --version 10.0.7 --check
+# Проверить серию на чистом архиве 10.0.8
+./scripts/build_and_install_ubuntu.sh --version 10.0.8 --check
 
 # Собрать в кэш без установки
-./scripts/build_and_install_ubuntu.sh --version 10.0.7 --build-only --rebuild
+./scripts/build_and_install_ubuntu.sh --version 10.0.8 --build-only --rebuild
 
 # Установить подготовленный кэш и обновить официальные библиотеки
-./scripts/build_and_install_ubuntu.sh --version 10.0.7 --from-cache --update-libraries
+./scripts/build_and_install_ubuntu.sh --version 10.0.8 --from-cache --update-libraries
 
 # Либо собрать и установить одним шагом
-./scripts/build_and_install_ubuntu.sh --version 10.0.7 --rebuild --update-libraries
+./scripts/build_and_install_ubuntu.sh --version 10.0.8 --rebuild --update-libraries
 ```
 
 На Debian/Ubuntu установщик проверяет пакеты через `dpkg`/`apt` и использует
@@ -150,7 +156,7 @@ multiarch-layout `/usr/lib/<triplet>`.
 
 ## Как работает build_and_install_ubuntu.sh
 
-1. **Определяет** версию установленного KiCad (`dpkg` / `kicad --version`)
+1. **Выбирает** новейшую поддержанную стабильную серию или `--version`; для `--restore` определяет установленную пакетную версию
 2. **Находит** папку `patches/kicad-X.X.X/` с патчами для этой версии
 3. **Вычисляет** хэш набора патчей → проверяет кэш `cache/kicad-X.X.X-HASH/`
 4. **Если кэш есть** → предлагает установить за секунды
@@ -163,6 +169,57 @@ multiarch-layout `/usr/lib/<triplet>`.
 7. **Делает бэкап** оригинальных системных файлов (`cache/kicad-X.X.X-original/`)
 8. **Устанавливает** из кэша в системную директорию KiCad (требует `sudo`)
 
+## Кэш сборки и очистка
+
+По умолчанию кэш хранится в каталоге `cache/` в корне этого репозитория.
+Готовые сборки и промежуточные файлы компиляции находятся отдельно:
+
+| Каталог | Содержимое |
+| --- | --- |
+| `cache/kicad-arch-<версия>-<хэш>/` | Готовые сборки Arch для установки через `--from-cache` |
+| `cache/kicad-<версия>-<хэш>/` | Готовые сборки Debian/Ubuntu |
+| `cache/*-original/` | Резервные копии системных файлов для отката |
+| `cache/sources/` | Скачанные архивы исходников |
+| `kicad-src-arch/build/` | Промежуточные файлы компиляции Arch |
+| `kicad-src/build/` | Промежуточные файлы компиляции Debian/Ubuntu |
+
+Все команды ниже выполняются из корня репозитория, после завершения сборки
+и установки.
+
+```bash
+# Посмотреть готовые сборки Arch
+./scripts/build_and_install_arch.sh --list-cache
+
+# Удалить все кэшированные сборки Arch, включая последнюю версию
+./scripts/build_and_install_arch.sh --clean-cache
+```
+
+Очистка Arch удаляет каталоги `cache/kicad-arch-*`, кроме `*-original`.
+Установленный KiCad и резервные копии сохраняются. Для следующей установки
+через `--from-cache` потребуется заново подготовить сборку.
+
+Промежуточные файлы и архивы эта команда не удаляет. Их можно очистить отдельно:
+
+```bash
+# Удалить промежуточные файлы компиляции — выберите свою платформу
+rm -rf -- kicad-src-arch/build  # Arch
+rm -rf -- kicad-src/build       # Debian/Ubuntu
+
+# При необходимости удалить скачанные архивы исходников
+rm -f -- cache/sources/kicad-*.tar.gz
+```
+
+Удаление каталога `build/` сохраняет готовые сборки в `cache/`; удалённые
+архивы установщик скачает повторно при необходимости. Размеры каталогов:
+
+```bash
+du -sh cache/* kicad-src-arch/build kicad-src/build 2>/dev/null
+```
+
+Если при запуске задавались `CACHE_DIR`, `SOURCE_CACHE_DIR` или `SRC_DIR`,
+используйте соответствующие пути. Для `--list-cache` и `--clean-cache`
+передайте то же значение `CACHE_DIR`, что использовалось при сборке.
+
 ## Структура проекта
 
 ```
@@ -171,7 +228,8 @@ patches/
   kicad-9.0.8/          # combined diff для 9.0.8
   kicad-10.0.4/         # общие файлы патчей для ветки 10.0.x
   kicad-10.0.5/         # проверенный порядок патчей для 10.0.5
-  kicad-10.0.7/         # актуальная стабильная версия; 17 патчей
+  kicad-10.0.7/         # предыдущая серия; 19 патчей
+  kicad-10.0.8/         # актуальная серия; 20 патчей, включая library reload fix
   standalone/           # независимые патчи (gost, bus-entry)
 scripts/
   build_and_install_ubuntu.sh       # Debian/Ubuntu: патч → сборка → установка

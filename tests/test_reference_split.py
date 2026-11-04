@@ -1,6 +1,6 @@
 """Exercise KiCad's actual splitter without building the full GUI.
 
-Requires c++, wx-config, and the installer-cached 10.0.7 source archive.
+Requires c++, wx-config, and the installer-cached source archives.
 Only the two production method bodies are extracted; the harness supplies
 their storage/accessors. Full annotation integration remains a GUI/QA check.
 """
@@ -14,7 +14,6 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ARCHIVE = ROOT / "cache/sources/kicad-10.0.7.tar.gz"
 PATCH = ROOT / "patches/kicad-10.0.7/0020-annotation-utf8-reference.patch"
 
 HARNESS = r'''
@@ -52,9 +51,12 @@ int main(int argc, char** argv)
 
 
 class ReferenceSplitTests(unittest.TestCase):
+    version = "10.0.7"
+
     @classmethod
     def setUpClass(cls):
-        if not ARCHIVE.exists() or any(not shutil.which(tool)
+        source_archive = ROOT / f"cache/sources/kicad-{cls.version}.tar.gz"
+        if not source_archive.exists() or any(not shutil.which(tool)
                                        for tool in ("c++", "wx-config", "patch")):
             raise unittest.SkipTest("Requires cached KiCad source, c++, wx-config and patch")
         cls.tmp = tempfile.TemporaryDirectory()
@@ -62,11 +64,11 @@ class ReferenceSplitTests(unittest.TestCase):
         root = Path(cls.tmp.name)
         paths = ("eeschema/sch_reference_list.cpp",
                  "qa/tests/eeschema/test_sch_reference_list.cpp")
-        with tarfile.open(ARCHIVE) as archive:
+        with tarfile.open(source_archive) as archive:
             for path in paths:
                 target = root / path
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(archive.extractfile("kicad-10.0.7/" + path).read())
+                target.write_bytes(archive.extractfile(f"kicad-{cls.version}/" + path).read())
         source_path = root / paths[0]
         original = source_path.read_text()
         subprocess.run(["patch", "--batch", "--fuzz=0", "-p1", "-i", str(PATCH)],
@@ -118,6 +120,10 @@ class ReferenceSplitTests(unittest.TestCase):
                         self.assertEqual(number, "1")
                         reference = actual_prefix + "1"
                     self.assertEqual(reference, prefix + "1")
+
+
+class ReferenceSplit1008Tests(ReferenceSplitTests):
+    version = "10.0.8"
 
 
 if __name__ == "__main__":

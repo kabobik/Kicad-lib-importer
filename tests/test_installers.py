@@ -16,6 +16,65 @@ class InstallerTests(unittest.TestCase):
             ['bash', '-c', 'source "$1"; shift; ' + code, 'test', str(installer), *map(str, args)],
             capture_output=True, text=True, timeout=15, env=env)
 
+    def test_default_version_is_latest_stable_supported_series(self):
+        for installer in INSTALLERS:
+            with self.subTest(installer=installer.name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                for version in ('10.0.7', '10.0.8', '10.0.10', '10.0.11-rc1'):
+                    patches = root / ('kicad-' + version)
+                    patches.mkdir()
+                    (patches / 'fix.patch').write_text('placeholder\n')
+                (root / 'kicad-11.0.0').mkdir()  # Empty series isn't supported.
+                result = self.run_function(installer, '''
+                    PATCHES_DIR="$1"
+                    latest_supported_patch_version
+                ''', root)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), '10.0.10')
+
+    def test_main_selects_new_series_but_preserves_override_and_restore(self):
+        for installer in INSTALLERS:
+            for args, expected in ((('--check',), '10.0.8'),
+                                   (('--check', '--version', '10.0.7'), '10.0.7'),
+                                   (('--restore',), '10.0.7')):
+                with self.subTest(installer=installer.name, args=args), tempfile.TemporaryDirectory() as tmp:
+                    marker = Path(tmp) / 'selected-version'
+                    result = self.run_function(installer, '''
+                        selected_version_file="$1"; shift
+                        check_arch_host() { :; }
+                        check_not_root() { :; }
+                        report_default_version_context() { :; }
+                        report_arch_packages() { :; }
+                        detect_kicad_version() { echo 10.0.7; }
+                        detect_restore_version() { echo 10.0.7; }
+                        find_system_kicad() { echo /usr/bin; }
+                        cache_is_complete() { return 1; }
+                        restore_originals() { echo "$1" > "$selected_version_file"; }
+                        prepare_patch_check_source() {
+                            echo "$1" > "$selected_version_file"
+                            PATCH_CHECK_SRC=/unused
+                        }
+                        apply_patches() { :; }
+                        main "$@"
+                    ''', marker, *args)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(marker.read_text().strip(), expected)
+
+    def test_patch_context_mismatch_is_rejected_without_fuzz(self):
+        for installer in INSTALLERS:
+            with self.subTest(installer=installer.name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                src, patches = root / 'src', root / 'patches'
+                src.mkdir()
+                patches.mkdir()
+                (src / 'example').write_text('different\nbefore\ncontext\n')
+                (patches / 'fix.patch').write_text(
+                    '--- a/example\n+++ b/example\n@@ -1,3 +1,3 @@\n'
+                    ' original\n-before\n+after\n context\n')
+                result = self.run_function(installer, 'apply_patches "$1" "$2" true', src, patches)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertEqual((src / 'example').read_text(), 'different\nbefore\ncontext\n')
+
     def test_invalid_arguments(self):
         for installer in INSTALLERS:
             for args in (('--jobs', '0'), ('--jobs', '-1'), ('--jobs',),

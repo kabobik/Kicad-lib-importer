@@ -1,6 +1,21 @@
 #!/bin/bash
 # Shared checks for the Arch and Debian/Ubuntu installers.
 
+latest_supported_patch_version() {
+    local versions=()
+    local d version
+
+    while IFS= read -r -d '' d; do
+        version="${d##*/kicad-}"
+        if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && patch_dir_has_patches "$d"; then
+            versions+=("$version")
+        fi
+    done < <(find "$PATCHES_DIR" -maxdepth 1 -type d -name 'kicad-*' -print0 2>/dev/null)
+
+    [[ ${#versions[@]} -gt 0 ]] || return 1
+    printf "%s\n" "${versions[@]}" | sort -V | tail -1
+}
+
 validate_build_args() {
     [[ -z "$KICAD_VERSION_OVERRIDE" || "$KICAD_VERSION_OVERRIDE" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]] \
         || die "Invalid KiCad version: $KICAD_VERSION_OVERRIDE"

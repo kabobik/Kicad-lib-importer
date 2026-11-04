@@ -3,19 +3,19 @@
 # build_and_install_ubuntu.sh — Применение патчей KiCad, сборка и установка
 # ============================================================================
 #
-# Определяет установленную версию KiCad, находит подходящие патчи,
+# Выбирает новейшую поддержанную стабильную версию KiCad, применяет патчи,
 # собирает и устанавливает поверх системного KiCad. Использует кэш
 # собранных артефактов для быстрой повторной установки.
 #
 # Использование:
-#   ./scripts/build_and_install_ubuntu.sh                    # авто-определение версии
-#   ./scripts/build_and_install_ubuntu.sh --version 9.0.7    # явная версия
+#   ./scripts/build_and_install_ubuntu.sh                    # новейшая поддержанная версия
+#   ./scripts/build_and_install_ubuntu.sh --version 10.0.8    # явная версия
 #   ./scripts/build_and_install_ubuntu.sh --check            # dry-run, ничего не меняет
 #   ./scripts/build_and_install_ubuntu.sh --from-cache       # только из кэша (без сборки)
 #   ./scripts/build_and_install_ubuntu.sh --rebuild          # пересобрать, игнорируя кэш
 #   ./scripts/build_and_install_ubuntu.sh --build-only       # собрать в кэш без установки
 #   ./scripts/build_and_install_ubuntu.sh --update-libraries # обновить официальные библиотеки KiCad через apt
-#   ./scripts/build_and_install_ubuntu.sh -v 10.0.5 --rebuild # мягко обновить KiCad до 10.0.5
+#   ./scripts/build_and_install_ubuntu.sh -v 10.0.8 --rebuild # мягко обновить KiCad до 10.0.8
 #   ./scripts/build_and_install_ubuntu.sh --restore          # откат к оригинальным файлам
 #   ./scripts/build_and_install_ubuntu.sh --list-cache       # показать кэш
 #   ./scripts/build_and_install_ubuntu.sh --clean-cache      # очистить кэш
@@ -231,15 +231,16 @@ show_help() {
 │           build_and_install_ubuntu.sh — KiCad patch builder & installer        │
 └─────────────────────────────────────────────────────────────────────────┘
 
-  Определяет версию установленного KiCad, находит патчи, собирает из
+  Выбирает новейшую стабильную версию с локальными патчами, собирает из
   исходников и устанавливает поверх системного KiCad.
+  Для --restore по умолчанию используется установленная пакетная версия.
   При повторном запуске с теми же патчами использует кэш (секунды вместо часов).
 
 ИСПОЛЬЗОВАНИЕ:
   ./scripts/build_and_install_ubuntu.sh [ОПЦИИ]
 
 ОПЦИИ:
-  -v, --version X.X.X  Явно задать версию KiCad (по умолчанию: авто)
+  -v, --version X.X.X  Явно задать версию KiCad (по умолчанию: новейшая поддержанная)
   --check              Dry-run: показать план, ничего не менять
   --from-cache         Установить из кэша без пересборки
   --rebuild            Принудительная пересборка (игнорировать кэш)
@@ -274,14 +275,14 @@ show_help() {
   ./scripts/build_and_install_ubuntu.sh --check         # что будет установлено?
   ./scripts/build_and_install_ubuntu.sh                 # полная сборка + установка
   ./scripts/build_and_install_ubuntu.sh --from-cache    # быстрая установка из кэша
-  ./scripts/build_and_install_ubuntu.sh -v 10.0.5 --check
-                                                # проверить патчи на чистой 10.0.5
-  ./scripts/build_and_install_ubuntu.sh -v 10.0.5 --build-only --rebuild
-                                                # собрать 10.0.5 в кэш без sudo
-  ./scripts/build_and_install_ubuntu.sh -v 10.0.5 --from-cache --update-libraries
+  ./scripts/build_and_install_ubuntu.sh -v 10.0.8 --check
+                                                # проверить патчи на чистой 10.0.8
+  ./scripts/build_and_install_ubuntu.sh -v 10.0.8 --build-only --rebuild
+                                                # собрать 10.0.8 в кэш без sudo
+  ./scripts/build_and_install_ubuntu.sh -v 10.0.8 --from-cache --update-libraries
                                                 # обновить библиотеки и поставить кэш
-  ./scripts/build_and_install_ubuntu.sh -v 10.0.5 --rebuild
-                                                # собрать и установить 10.0.5 с патчами
+  ./scripts/build_and_install_ubuntu.sh -v 10.0.8 --rebuild
+                                                # собрать и установить 10.0.8 с патчами
   ./scripts/build_and_install_ubuntu.sh --restore       # откат
   ./scripts/build_and_install_ubuntu.sh -v 9.0.7 -j 16 # явная версия, 16 потоков
 
@@ -892,8 +893,8 @@ apply_patches() {
         name=$(basename "$p")
         printf "  ${DIM}%-50s${NC} " "$name"
 
-        local check_args=(--batch --forward -p1 --directory="$src" --dry-run)
-        local apply_args=(--batch -p1 --directory="$src" --forward)
+        local check_args=(--batch --forward --fuzz=0 -p1 --directory="$src" --dry-run)
+        local apply_args=(--batch --fuzz=0 -p1 --directory="$src" --forward)
 
         if ! git apply --numstat "$p" &>/dev/null; then
             echo -e "${RED}✗${NC}"
@@ -909,15 +910,15 @@ apply_patches() {
                 patch "${apply_args[@]}" < "$p" 2>&1 | tail -10 || true
                 die "Патч прошёл dry-run, но не применился: $name"
             fi
-        elif patch --batch --forward -R -p1 --directory="$src" --dry-run < "$p" &>/dev/null 2>&1; then
+        elif patch --batch --forward --fuzz=0 -R -p1 --directory="$src" --dry-run < "$p" &>/dev/null 2>&1; then
             echo -e "${YELLOW}уже применён${NC}"
         elif $dry; then
             echo -e "${RED}✗${NC}"
-            patch --batch --forward -p1 --directory="$src" --dry-run < "$p" 2>&1 | tail -10 || true
+            patch --batch --forward --fuzz=0 -p1 --directory="$src" --dry-run < "$p" 2>&1 | tail -10 || true
             die "Патч несовместим: $name"
         else
             echo -e "${RED}✗${NC}"
-            patch --batch --forward -p1 --directory="$src" --dry-run < "$p" 2>&1 | tail -10 || true
+            patch --batch --forward --fuzz=0 -p1 --directory="$src" --dry-run < "$p" 2>&1 | tail -10 || true
             die "Патч не применился: $name"
         fi
     done
@@ -1412,16 +1413,14 @@ main() {
     if [[ -n "$KICAD_VERSION_OVERRIDE" ]]; then
         version="$KICAD_VERSION_OVERRIDE"
         log "Версия задана явно: $version"
-    else
-        if $MODE_RESTORE; then
-            log "Определяю пакетную версию KiCad для отката..."
-            version=$(detect_restore_version)
-        else
-            log "Определяю версию установленного KiCad..."
-            version=$(detect_kicad_version)
-        fi
-        [[ -n "$version" ]] || die "KiCad не найден. Используйте --version X.X.X"
+    elif $MODE_RESTORE; then
+        log "Определяю пакетную версию KiCad для отката..."
+        version=$(detect_restore_version)
+        [[ -n "$version" ]] || die "KiCad не найден. Используйте --version X.X.X --restore"
         ok "Найден KiCad $version"
+    else
+        version=$(latest_supported_patch_version) || die "Нет поддержанных стабильных версий в patches/kicad-X.X.X"
+        log "Выбрана новейшая поддержанная версия KiCad: $version"
     fi
 
     # ── 2. Откат ──

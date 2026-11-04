@@ -1,0 +1,332 @@
+Subject: [PATCH] Keep footprint snapshots alive during background library reload
+
+The library-table dialog starts asynchronous preloading and immediately asks
+open editors to rebuild their trees. GetFootprints used to drop its read lock
+before returning borrowed pointers; a worker could replace the cache and delete
+those objects while the UI was still in FOOTPRINT::GetSearchTerms().
+
+Return shared ownership and retain it in every consumer through the last read.
+Notify the editor, viewer and CVPCB after preloading finishes, not when it starts.
+Include a deterministic QA regression for a snapshot surviving worker replacement.
+
+Applies after the local KiCad 10.0.8 series (0002 through 0020).
+
+diff --git a/pcbnew/footprint_library_adapter.h b/pcbnew/footprint_library_adapter.h
+--- a/pcbnew/footprint_library_adapter.h
++++ b/pcbnew/footprint_library_adapter.h
+@@ -57,12 +57,14 @@
+     std::optional<LIB_STATUS> LoadOne( const wxString& aNickname );
+ 
+     /**
+-     * Retrieves a list of footprints contained in a given loaded library
++     * Retrieves an owning snapshot of the footprints in a loaded library.
++     * Keep the returned shared pointers alive while using any borrowed item pointers.
++     * Reloading, overwriting or deleting cached entries cannot invalidate this snapshot.
+      * @param aNickname is the library to query
+      * @param aBestEfforts if true, don't throw on errors, just return a smaller or empty list.
+      * @return a list of footprints contained in the given library
+      */
+-    std::vector<FOOTPRINT*> GetFootprints( const wxString& aNickname, bool aBestEfforts = false );
++    std::vector<std::shared_ptr<FOOTPRINT>> GetFootprints( const wxString& aNickname, bool aBestEfforts = false );
+ 
+ 
+     /**
+@@ -198,8 +200,8 @@
+     static std::shared_mutex GlobalLibraryMutex;
+ 
+     /// Storage for preloaded footprints, indexed by library nickname.
+-    /// These are cloned during library enumeration so GetFootprints() returns instantly.
+-    static LEAK_AT_EXIT<std::map<wxString, std::vector<std::unique_ptr<FOOTPRINT>>>> PreloadedFootprints;
++    /// Shared ownership keeps snapshots alive while background loading replaces the cache.
++    static LEAK_AT_EXIT<std::map<wxString, std::vector<std::shared_ptr<FOOTPRINT>>>> PreloadedFootprints;
+     static std::shared_mutex PreloadedFootprintsMutex;
+ 
+     /// Filesystem timestamps from when PreloadedFootprints was last populated, guarded by
+diff --git a/pcbnew/footprint_library_adapter.cpp b/pcbnew/footprint_library_adapter.cpp
+--- a/pcbnew/footprint_library_adapter.cpp
++++ b/pcbnew/footprint_library_adapter.cpp
+@@ -38,7 +38,7 @@
+ 
+ std::shared_mutex FOOTPRINT_LIBRARY_ADAPTER::GlobalLibraryMutex;
+ 
+-LEAK_AT_EXIT<std::map<wxString, std::vector<std::unique_ptr<FOOTPRINT>>>> FOOTPRINT_LIBRARY_ADAPTER::PreloadedFootprints;
++LEAK_AT_EXIT<std::map<wxString, std::vector<std::shared_ptr<FOOTPRINT>>>> FOOTPRINT_LIBRARY_ADAPTER::PreloadedFootprints;
+ 
+ std::shared_mutex FOOTPRINT_LIBRARY_ADAPTER::PreloadedFootprintsMutex;
+ 
+@@ -80,7 +80,7 @@
+     // FootprintEnumerate populates the plugin's internal FP_CACHE with parsed footprints
+     plugin->FootprintEnumerate( namesAS, aUri, false, &options );
+ 
+-    std::vector<std::unique_ptr<FOOTPRINT>> footprints;
++    std::vector<std::shared_ptr<FOOTPRINT>> footprints;
+     footprints.reserve( namesAS.size() );
+ 
+     // For plugins with internal caches (like kicad_sexpr), GetEnumeratedFootprint returns
+@@ -167,22 +167,17 @@
+ }
+ 
+ 
+-std::vector<FOOTPRINT*> FOOTPRINT_LIBRARY_ADAPTER::GetFootprints( const wxString& aNickname, bool aBestEfforts )
+-{
+-    std::vector<FOOTPRINT*> footprints;
+-
++std::vector<std::shared_ptr<FOOTPRINT>> FOOTPRINT_LIBRARY_ADAPTER::GetFootprints( const wxString& aNickname, bool aBestEfforts )
++{
+     std::shared_lock lock( PreloadedFootprintsMutex );
+     auto it = PreloadedFootprints.Get().find( aNickname );
+ 
+     if( it == PreloadedFootprints.Get().end() )
+-        return footprints;
+-
+-    footprints.reserve( it->second.size() );
+-
+-    for( const auto& fp : it->second )
+-        footprints.push_back( fp.get() );
+-
+-    return footprints;
++        return {};
++
++    // Copy ownership while holding the lock. Returning raw pointers allowed a loader to
++    // destroy these footprints before the tree finished reading their search terms.
++    return it->second;
+ }
+ 
+ 
+@@ -449,7 +444,7 @@
+                 {
+                     auto& footprints = it->second;
+                     footprints.erase( std::remove_if( footprints.begin(), footprints.end(),
+-                                                      [&fpName]( const std::unique_ptr<FOOTPRINT>& fp )
++                                                      [&fpName]( const std::shared_ptr<FOOTPRINT>& fp )
+                                                       {
+                                                           return fp->GetFPID().GetLibItemName().wx_str() == fpName;
+                                                       } ),
+@@ -502,7 +497,7 @@
+             {
+                 auto& footprints = it->second;
+                 footprints.erase( std::remove_if( footprints.begin(), footprints.end(),
+-                                                  [&aFootprintName]( const std::unique_ptr<FOOTPRINT>& fp )
++                                                  [&aFootprintName]( const std::shared_ptr<FOOTPRINT>& fp )
+                                                   {
+                                                       return fp->GetFPID().GetLibItemName().wx_str() == aFootprintName;
+                                                   } ),
+diff --git a/pcbnew/fp_tree_synchronizing_adapter.cpp b/pcbnew/fp_tree_synchronizing_adapter.cpp
+--- a/pcbnew/fp_tree_synchronizing_adapter.cpp
++++ b/pcbnew/fp_tree_synchronizing_adapter.cpp
+@@ -144,12 +144,12 @@
+         bool pinned = alg::contains( cfg->m_Session.pinned_fp_libs, libName )
+                         || alg::contains( project.m_PinnedFootprintLibs, libName );
+ 
+-        std::vector<FOOTPRINT*> footprints = m_libs->GetFootprints( libName, true );
++        auto footprints = m_libs->GetFootprints( libName, true );
+         std::vector<LIB_TREE_ITEM*> treeItems;
+         treeItems.reserve( footprints.size() );
+ 
+-        for( FOOTPRINT* fp : footprints )
+-            treeItems.push_back( fp );
++        for( const auto& fp : footprints )
++            treeItems.push_back( fp.get() );
+ 
+         DoAddLibrary( libName, ( *optRow )->Description(), treeItems, pinned, true );
+         m_libMap.insert( libName );
+@@ -200,13 +200,13 @@
+     // This picks up external modifications such as git branch switches.
+     m_libs->RefreshLibraryIfChanged( aLibNode.m_Name );
+ 
+-    std::vector<FOOTPRINT*> footprints = m_libs->GetFootprints( aLibNode.m_Name, true );
++    auto footprints = m_libs->GetFootprints( aLibNode.m_Name, true );
+ 
+     // Build a map of footprint names for quick lookup
+     std::map<wxString, FOOTPRINT*> fpMap;
+ 
+-    for( FOOTPRINT* fp : footprints )
+-        fpMap[fp->GetFPID().GetLibItemName()] = fp;
++    for( const auto& fp : footprints )
++        fpMap[fp->GetFPID().GetLibItemName()] = fp.get();
+ 
+     // Remove items that no longer exist
+     for( auto nodeIt = aLibNode.m_Children.begin(); nodeIt != aLibNode.m_Children.end(); )
+diff --git a/pcbnew/fp_tree_model_adapter.cpp b/pcbnew/fp_tree_model_adapter.cpp
+--- a/pcbnew/fp_tree_model_adapter.cpp
++++ b/pcbnew/fp_tree_model_adapter.cpp
+@@ -60,12 +60,12 @@
+         bool pinned = alg::contains( cfg->m_Session.pinned_fp_libs, libName )
+                         || alg::contains( project.m_PinnedFootprintLibs, libName );
+ 
+-        std::vector<FOOTPRINT*> footprints = m_libs->GetFootprints( libName, true );
++        auto footprints = m_libs->GetFootprints( libName, true );
+         std::vector<LIB_TREE_ITEM*> treeItems;
+         treeItems.reserve( footprints.size() );
+ 
+-        for( FOOTPRINT* fp : footprints )
+-            treeItems.push_back( fp );
++        for( const auto& fp : footprints )
++            treeItems.push_back( fp.get() );
+ 
+         DoAddLibrary( libName, *m_libs->GetLibraryDescription( libName ), treeItems, pinned, true );
+     }
+diff --git a/pcbnew/footprint_viewer_frame.cpp b/pcbnew/footprint_viewer_frame.cpp
+--- a/pcbnew/footprint_viewer_frame.cpp
++++ b/pcbnew/footprint_viewer_frame.cpp
+@@ -495,7 +495,7 @@
+     if( !nickname )
+         return;
+ 
+-    std::vector<FOOTPRINT*> footprints = adapter->GetFootprints( nickname, true );
++    auto footprints = adapter->GetFootprints( nickname, true );
+ 
+     if( footprints.empty() )
+         return;
+@@ -511,7 +511,7 @@
+             const wxString       filterTerm = tokenizer.GetNextToken().Lower();
+             EDA_COMBINED_MATCHER matcher( filterTerm, CTX_LIBITEM );
+ 
+-            for( FOOTPRINT* footprint : footprints )
++            for( const auto& footprint : footprints )
+             {
+                 int matched = matcher.ScoreTerms( footprint->GetSearchTerms() );
+ 
+@@ -524,7 +524,7 @@
+         }
+     }
+ 
+-    for( FOOTPRINT* footprint : footprints )
++    for( const auto& footprint : footprints )
+     {
+         wxString fpName = footprint->GetFPID().GetLibItemName();
+ 
+diff --git a/pcbnew/pcbnew.cpp b/pcbnew/pcbnew.cpp
+--- a/pcbnew/pcbnew.cpp
++++ b/pcbnew/pcbnew.cpp
+@@ -167,9 +167,9 @@
+ 
+         for( const wxString& nickname : adapter->GetLibraryNames() )
+         {
+-            std::vector<FOOTPRINT*> footprints = adapter->GetFootprints( nickname, true );
+-
+-            for( FOOTPRINT* fp : footprints )
++            auto footprints = adapter->GetFootprints( nickname, true );
++
++            for( const auto& fp : footprints )
+             {
+                 if( !fp )
+                     continue;
+@@ -887,6 +887,7 @@
+                 std::string payload = "";
+                 aKiway->ExpressMail( FRAME_PCB_EDITOR, MAIL_RELOAD_LIB, payload, nullptr, true );
+                 aKiway->ExpressMail( FRAME_FOOTPRINT_EDITOR, MAIL_RELOAD_LIB, payload, nullptr, true );
++                aKiway->ExpressMail( FRAME_FOOTPRINT_VIEWER, MAIL_RELOAD_LIB, payload, nullptr, true );
+                 aKiway->ExpressMail( FRAME_CVPCB, MAIL_RELOAD_LIB, payload, nullptr, true );
+             }
+         };
+diff --git a/pcbnew/dialogs/panel_fp_lib_table.cpp b/pcbnew/dialogs/panel_fp_lib_table.cpp
+--- a/pcbnew/dialogs/panel_fp_lib_table.cpp
++++ b/pcbnew/dialogs/panel_fp_lib_table.cpp
+@@ -1026,8 +1026,6 @@
+     if( KIFACE *face = aKiway->KiFACE( KIWAY::FACE_PCB ) )
+         face->PreloadLibraries( aKiway );
+ 
+-    std::string payload = "";
+-    aKiway->ExpressMail( FRAME_FOOTPRINT_EDITOR, MAIL_RELOAD_LIB, payload );
+-    aKiway->ExpressMail( FRAME_FOOTPRINT_VIEWER, MAIL_RELOAD_LIB, payload );
+-    aKiway->ExpressMail( FRAME_CVPCB, MAIL_RELOAD_LIB, payload );
+-}
++    // PreloadLibraries notifies all footprint consumers when loading has finished.
++    // Refreshing here races the loader and exposes an incomplete library list.
++}
+diff --git a/qa/tests/pcbnew/test_footprint_library_adapter.cpp b/qa/tests/pcbnew/test_footprint_library_adapter.cpp
+--- a/qa/tests/pcbnew/test_footprint_library_adapter.cpp
++++ b/qa/tests/pcbnew/test_footprint_library_adapter.cpp
+@@ -18,6 +18,7 @@
+  */
+ 
+ #include <atomic>
++#include <exception>
+ #include <filesystem>
+ #include <fstream>
+ #include <memory>
+@@ -270,13 +271,69 @@
+ 
+     bool found = false;
+ 
+-    for( FOOTPRINT* fp : adapter.GetFootprints( nickname, true ) )
++    for( const auto& fp : adapter.GetFootprints( nickname, true ) )
+     {
+         if( fp && fp->GetFPID().GetLibItemName().wx_str() == wxS( "ZZ_PulledFootprint" ) )
+             found = true;
+     }
+ 
+     BOOST_CHECK_MESSAGE( found, "a footprint added to the library on disk is missing from the listing" );
++}
++
++
++// Force the reported ordering: the UI takes a snapshot, the worker replaces the cache,
++// then the UI reads the old search terms. No timing-dependent sleeps are needed.
++BOOST_AUTO_TEST_CASE( FootprintSnapshotSurvivesBackgroundReload )
++{
++    KI_TEST::TEMPORARY_DIRECTORY tmpLib( "kicad_qa_adapter_snapshot", ".pretty" );
++    const std::filesystem::path source =
++            std::filesystem::path( getResistorLibPath().ToStdString() ) / "R_0402_1005Metric.kicad_mod";
++    const auto oldFile = tmpLib.GetPath() / "R_0402_1005Metric.kicad_mod";
++    std::filesystem::copy_file( source, oldFile );
++
++    LIBRARY_MANAGER                manager;
++    TEST_FOOTPRINT_LIBRARY_ADAPTER adapter( manager );
++    const wxString nickname = wxS( "SnapshotReload" );
++    adapter.SeedLoadedLibrary( nickname, tmpLib.GetPath().string() );
++    adapter.RefreshLibraryIfChanged( nickname );
++
++    auto snapshot = adapter.GetFootprints( nickname, true );
++    BOOST_REQUIRE_EQUAL( snapshot.size(), 1u );
++    std::weak_ptr<FOOTPRINT> oldFootprint = snapshot.front();
++    const LIB_ID oldId = snapshot.front()->GetFPID();
++    snapshot.front()->GetSearchTerms();
++
++    // Ensure the timestamp changes by changing the number of files as well as their names.
++    std::filesystem::remove( oldFile );
++    std::filesystem::copy_file( source, tmpLib.GetPath() / "ReplacementA.kicad_mod" );
++    std::filesystem::copy_file( source, tmpLib.GetPath() / "ReplacementB.kicad_mod" );
++
++    std::exception_ptr error;
++    std::thread worker( [&]()
++    {
++        try
++        {
++            adapter.RefreshLibraryIfChanged( nickname );
++        }
++        catch( ... )
++        {
++            error = std::current_exception();
++        }
++    } );
++    worker.join();
++
++    if( error )
++        std::rethrow_exception( error );
++
++    auto current = adapter.GetFootprints( nickname, true );
++    BOOST_REQUIRE_EQUAL( current.size(), 2u );
++    BOOST_CHECK( current.front().get() != snapshot.front().get() );
++    BOOST_CHECK( !oldFootprint.expired() );
++    BOOST_CHECK( snapshot.front()->GetFPID() == oldId );
++    BOOST_CHECK( !snapshot.front()->GetSearchTerms().empty() );
++
++    snapshot.clear();
++    BOOST_CHECK( oldFootprint.expired() );
+ }
+ 
+ 
+@@ -321,9 +378,9 @@
+     BOOST_REQUIRE_EQUAL( adapter.GetFootprints( nickA, true ).size(), 1u );
+     BOOST_REQUIRE_EQUAL( adapter.GetFootprints( nickB, true ).size(), 8u );
+ 
+-    // Re-enumeration frees every footprint in the library and allocates replacements.  A single
+-    // address could be reused by chance, a whole vector of them could not.
+-    std::vector<FOOTPRINT*> untouched = adapter.GetFootprints( nickB, true );
++    // An unchanged library must keep its existing cache entries. The snapshot retains
++    // ownership, so their addresses cannot be recycled by a concurrent reload.
++    auto untouched = adapter.GetFootprints( nickB, true );
+ 
+     std::filesystem::copy_file( source, tmpA.GetPath() / "ZZ_Added.kicad_mod" );
+ 

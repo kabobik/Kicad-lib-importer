@@ -13,7 +13,7 @@
 # Usage:
 #   ./scripts/build_and_install_arch.sh
 #   ./scripts/build_and_install_arch.sh --check
-#   ./scripts/build_and_install_arch.sh --version 10.0.5 --rebuild
+#   ./scripts/build_and_install_arch.sh --version 10.0.8 --rebuild
 #   ./scripts/build_and_install_arch.sh --from-cache
 #   ./scripts/build_and_install_arch.sh --build-only
 #   ./scripts/build_and_install_arch.sh --restore
@@ -180,7 +180,7 @@ Cached binaries are checked again after package updates, before system copying.
 EXAMPLES:
   ./scripts/build_and_install_arch.sh --check
   ./scripts/build_and_install_arch.sh
-  ./scripts/build_and_install_arch.sh --version 10.0.5 --rebuild
+  ./scripts/build_and_install_arch.sh --version 10.0.8 --rebuild
   ./scripts/build_and_install_arch.sh --from-cache
   ./scripts/build_and_install_arch.sh --restore
 EOF
@@ -396,20 +396,6 @@ detect_restore_version() {
     [[ -n "$ver" ]] && echo "$ver" && return
 
     echo ""
-}
-
-latest_supported_patch_version() {
-    local versions=()
-    local d
-
-    while IFS= read -r -d '' d; do
-        if patch_dir_has_patches "$d"; then
-            versions+=("$(basename "$d" | sed 's/^kicad-//')")
-        fi
-    done < <(find "$PATCHES_DIR" -maxdepth 1 -type d -name 'kicad-*' -print0 2>/dev/null)
-
-    [[ ${#versions[@]} -gt 0 ]] || return 1
-    printf "%s\n" "${versions[@]}" | sort -V | tail -1
 }
 
 report_default_version_context() {
@@ -698,8 +684,8 @@ apply_patches() {
         name=$(basename "$patch_file")
         printf "  ${DIM}%-56s${NC} " "$name"
 
-        local check_args=(--batch --forward -p1 --directory="$src" --dry-run)
-        local apply_args=(--batch -p1 --directory="$src" --forward)
+        local check_args=(--batch --forward --fuzz=0 -p1 --directory="$src" --dry-run)
+        local apply_args=(--batch --fuzz=0 -p1 --directory="$src" --forward)
 
         if ! git apply --numstat "$patch_file" >/dev/null 2>&1; then
             echo -e "${RED}fail${NC}"
@@ -715,15 +701,15 @@ apply_patches() {
                 patch "${apply_args[@]}" < "$patch_file" 2>&1 | tail -10 || true
                 die "Patch passed dry-run but failed to apply: $name"
             fi
-        elif patch --batch --forward -R -p1 --directory="$src" --dry-run < "$patch_file" >/dev/null 2>&1; then
+        elif patch --batch --forward --fuzz=0 -R -p1 --directory="$src" --dry-run < "$patch_file" >/dev/null 2>&1; then
             echo -e "${YELLOW}already applied${NC}"
         elif $dry; then
             echo -e "${RED}fail${NC}"
-            patch --batch --forward -p1 --directory="$src" --dry-run < "$patch_file" 2>&1 | tail -10 || true
+            patch --batch --forward --fuzz=0 -p1 --directory="$src" --dry-run < "$patch_file" 2>&1 | tail -10 || true
             die "Patch is incompatible: $name"
         else
             echo -e "${RED}fail${NC}"
-            patch --batch --forward -p1 --directory="$src" --dry-run < "$patch_file" 2>&1 | tail -10 || true
+            patch --batch --forward --fuzz=0 -p1 --directory="$src" --dry-run < "$patch_file" 2>&1 | tail -10 || true
             die "Patch failed: $name"
         fi
     done

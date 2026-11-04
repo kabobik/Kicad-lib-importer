@@ -99,6 +99,27 @@
 ./scripts/build_and_install_ubuntu.sh --version 10.0.7 --from-cache --update-libraries
 ```
 
+## kicad-10.0.8/
+
+Актуальная серия на 4 ноября 2026: 20 патчей `0002..0021`.
+Все 19 патчей серии 10.0.7 переиспользуются без изменений через `series`.
+Новый `0021-footprint-library-reload-lifetime.patch` устраняет обращение к
+освобождённым посадочным местам при фоновой перезагрузке библиотек.
+
+Оба установщика выбирают эту стабильную серию по умолчанию. Применение
+выполняется с `--fuzz=0`; несовместимый контекст останавливает установку.
+[Подробности и проверка](kicad-10.0.8/README.md).
+
+```bash
+./scripts/build_and_install_arch.sh --check
+./scripts/build_and_install_arch.sh --version 10.0.8 --build-only --rebuild
+./scripts/build_and_install_arch.sh --version 10.0.8 --from-cache
+
+./scripts/build_and_install_ubuntu.sh --check
+./scripts/build_and_install_ubuntu.sh --version 10.0.8 --build-only --rebuild
+./scripts/build_and_install_ubuntu.sh --version 10.0.8 --from-cache --update-libraries
+```
+
 ## standalone/
 
 Самостоятельные патчи, не привязанные к конкретной версии.
