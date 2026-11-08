@@ -1,0 +1,6 @@
+[drawing]
+wire_length_mm = 2.5
+label_size_mm = 1.27
+
+[naming]
+prefix = "REC"
