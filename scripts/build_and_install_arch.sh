@@ -140,6 +140,96 @@ sudo_atomic_copy() {
     run_sudo mv -f "$tmp" "$dst"
 }
 
+# Keep pacman's existing directives (including Include files) intact. A second
+# IgnorePkg directive is additive; pacman-conf remains the configuration parser.
+block_kicad_updates() {
+    local config="${1:-/etc/pacman.conf}"
+    run_sudo python3 - "$config" <<'PY'
+from pathlib import Path
+import fnmatch
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+config = Path(sys.argv[1]).resolve()
+
+def ignored(path):
+    return subprocess.check_output(
+        ['pacman-conf', '--config', str(path), 'IgnorePkg'], text=True).split()
+
+previous = ignored(config)
+if any(fnmatch.fnmatchcase('kicad', pattern) for pattern in previous):
+    print('KiCad updates are already blocked.')
+    sys.exit(0)
+original = config.read_bytes()
+lines = original.splitlines(keepends=True)
+for index, line in enumerate(lines):
+    if line.split(b'#', 1)[0].strip() == b'[options]':
+        if not line.endswith(b'\n'):
+            lines[index] += b'\n'
+        lines.insert(index + 1, b'IgnorePkg = kicad\n')
+        break
+else:
+    raise SystemExit('No [options] section found; configuration was not changed.')
+
+fd, temporary = tempfile.mkstemp(prefix='.' + config.name + '.kicad-', dir=config.parent)
+os.close(fd)
+try:
+    candidate = Path(temporary)
+    candidate.write_bytes(b''.join(lines))
+    shutil.copystat(config, candidate)
+    stat = config.stat()
+    os.chown(candidate, stat.st_uid, stat.st_gid)
+    updated = ignored(candidate)
+    if 'kicad' not in updated or not set(previous).issubset(updated):
+        raise SystemExit('IgnorePkg validation failed; configuration was not changed.')
+    if config.read_bytes() != original:
+        raise SystemExit('Configuration changed during update; please retry.')
+    backup_fd, backup = tempfile.mkstemp(prefix=config.name + '.before-kicad-pin-', dir=config.parent)
+    os.close(backup_fd)
+    shutil.copy2(config, backup)
+    os.replace(candidate, config)
+    print('KiCad package updates blocked. Backup: ' + backup)
+finally:
+    Path(temporary).unlink(missing_ok=True)
+PY
+}
+
+offer_kicad_update_block() {
+    local config="${1:-/etc/pacman.conf}" ignored pattern answer
+    if ! ignored=$(pacman-conf --config "$config" IgnorePkg); then
+        warn "Cannot read pacman IgnorePkg; update protection was not changed."
+        return 0
+    fi
+    while IFS= read -r pattern; do
+        if [[ -n "$pattern" && kicad == $pattern ]]; then
+            ok "KiCad package updates are already blocked by IgnorePkg."
+            return 0
+        fi
+    done <<< "$ignored"
+    if [[ ! -t 0 ]]; then
+        warn "No interactive input: update protection unchanged. Add kicad to IgnorePkg in $config to protect local patches."
+        return 0
+    fi
+    echo ""
+    log "A system package update can replace this patched KiCad build."
+    ask "Block system updates of the kicad package? [y/N]: "
+    if ! read -r answer; then
+        answer=""
+    fi
+    case "${answer,,}" in
+        y|yes|д|да)
+            if ! block_kicad_updates "$config"; then
+                warn "KiCad is installed, but update protection failed. Add kicad to IgnorePkg in $config manually."
+            fi
+            ;;
+        *) log "Update protection unchanged." ;;
+    esac
+    return 0
+}
+
 show_help() {
     cat << 'EOF'
 build_and_install_arch.sh - KiCad patch builder & installer for Arch Linux
@@ -176,6 +266,9 @@ WHAT THE INSTALLER INSTALLS THROUGH PACMAN:
 Package installation uses pacman -Syu --needed: databases are refreshed and
 a full system upgrade is proposed. Review pacman's transaction confirmation.
 Cached binaries are checked again after package updates, before system copying.
+After a successful installation, an interactive prompt offers to block kicad
+updates through IgnorePkg (default: no). Existing exclusions are preserved.
+No prompt is shown for --check, --build-only, --restore or non-interactive input.
 
 EXAMPLES:
   ./scripts/build_and_install_arch.sh --check
@@ -1245,6 +1338,7 @@ main() {
     backup_originals "$version" "$cache_install"
     install_from_cache "$cache_install"
     verify_installation "$version"
+    offer_kicad_update_block
 
     echo ""
     echo -e "${GREEN}${BOLD}============================================================${NC}"

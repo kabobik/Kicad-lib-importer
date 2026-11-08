@@ -1,5 +1,7 @@
 """Installer regression checks; no root or network needed."""
 import os
+import pty
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -11,10 +13,10 @@ INSTALLERS = [ROOT / 'scripts' / f'build_and_install_{name}.sh'
 
 
 class InstallerTests(unittest.TestCase):
-    def run_function(self, installer, code, *args, env=None):
+    def run_function(self, installer, code, *args, env=None, input=None):
         return subprocess.run(
             ['bash', '-c', 'source "$1"; shift; ' + code, 'test', str(installer), *map(str, args)],
-            capture_output=True, text=True, timeout=15, env=env)
+            capture_output=True, text=True, timeout=15, env=env, input=input)
 
     def test_default_version_is_latest_stable_supported_series(self):
         for installer in INSTALLERS:
@@ -227,6 +229,129 @@ exit 1
             ''', tmp, log)
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(log.read_text().splitlines(), ['packages', 'verify'])
+
+    def test_arch_pin_preserves_config_backup_and_is_idempotent(self):
+        if not shutil.which('pacman-conf'):
+            self.skipTest('Requires pacman-conf')
+        for directive in ('', 'IgnorePkg = cursor-bin\n', 'IgnorePkg = kicad*\n'):
+            with self.subTest(directive=directive), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                included = root / 'included.conf'
+                included.write_text('IgnorePkg = another-package\n')
+                config = root / 'pacman.conf'
+                original = ('# keep comments\n[options]\n' + directive
+                            + f'Include = {included}\n[custom]\nServer = https://example.invalid\n')
+                config.write_text(original)
+                config.chmod(0o640)
+                result = self.run_function(INSTALLERS[0], '''
+                    run_sudo() { "$@"; }
+                    block_kicad_updates "$1"
+                    block_kicad_updates "$1"
+                ''', config)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                backups = list(root.glob('pacman.conf.before-kicad-pin-*'))
+                if 'kicad*' in directive:
+                    self.assertEqual(config.read_text(), original)
+                    self.assertEqual(backups, [])
+                else:
+                    self.assertEqual(config.read_text(), original.replace(
+                        '[options]\n', '[options]\nIgnorePkg = kicad\n'))
+                    self.assertEqual(len(backups), 1)
+                    self.assertEqual(backups[0].read_text(), original)
+                self.assertEqual(config.stat().st_mode & 0o777, 0o640)
+                self.assertEqual(included.read_text(), 'IgnorePkg = another-package\n')
+                self.assertEqual(list(root.glob('.pacman.conf.kicad-*')), [])
+
+    def test_arch_pin_rejects_invalid_configuration(self):
+        if not shutil.which('pacman-conf'):
+            self.skipTest('Requires pacman-conf')
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / 'pacman.conf'
+            config.write_text('[custom]\nServer = https://example.invalid\n')
+            original = config.read_bytes()
+            result = self.run_function(INSTALLERS[0], '''
+                run_sudo() { "$@"; }
+                block_kicad_updates "$1"
+            ''', config)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(config.read_bytes(), original)
+            self.assertEqual(list(Path(tmp).glob('*.before-kicad-pin-*')), [])
+
+    def test_arch_pin_prompt_requires_interactive_explicit_consent(self):
+        for answer, expected in ((b'y\n', True), (b'yes\n', True),
+                                 ('да\n'.encode(), True), (b'n\n', False),
+                                 (b'\n', False), (b'\x04', False), (None, False)):
+            with self.subTest(answer=answer), tempfile.TemporaryDirectory() as tmp:
+                marker = Path(tmp) / 'blocked'
+                command = ['bash', '-c', '''
+                    source "$1"
+                    marker="$2"
+                    pacman-conf() { return 0; }
+                    block_kicad_updates() { touch "$marker"; }
+                    offer_kicad_update_block
+                ''', 'test', str(INSTALLERS[0]), str(marker)]
+                if answer is None:
+                    result = subprocess.run(command, input='y\n', capture_output=True,
+                                            text=True, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                else:
+                    master, slave = pty.openpty()
+                    try:
+                        with subprocess.Popen(command, stdin=slave, stdout=subprocess.PIPE,
+                                              stderr=subprocess.PIPE) as process:
+                            os.write(master, answer)
+                            out, err = process.communicate(timeout=10)
+                            self.assertEqual(process.returncode, 0, out + err)
+                    finally:
+                        os.close(master)
+                        os.close(slave)
+                self.assertEqual(marker.exists(), expected)
+
+    def test_arch_already_blocked_or_unreadable_config_skips_prompt(self):
+        for query in ('echo kicad', "echo 'kicad*'", 'return 1'):
+            with self.subTest(query=query):
+                result = self.run_function(INSTALLERS[0], '''
+                    eval "pacman-conf() { $1; }"
+                    ask() { echo UNEXPECTED_PROMPT; }
+                    block_kicad_updates() { echo UNEXPECTED_WRITE; }
+                    offer_kicad_update_block
+                ''', query)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn('UNEXPECTED', result.stdout)
+
+    def test_arch_offers_pin_only_after_successful_installation(self):
+        for mode, failure, expected in (
+            ('--from-cache', False, ['verify', 'backup', 'install', 'verify-install', 'offer']),
+            ('--from-cache', True, ['verify', 'backup', 'install', 'verify-install']),
+            ('--build-only', False, []), ('--check', False, []), ('--restore', False, []),
+        ):
+            with self.subTest(mode=mode, failure=failure), tempfile.TemporaryDirectory() as tmp:
+                log = Path(tmp) / 'steps'
+                result = self.run_function(INSTALLERS[0], '''
+                    CACHE_DIR="$1"; step_log="$2"; mode="$3"; failure="$4"
+                    check_arch_host() { :; }
+                    check_not_root() { :; }
+                    cache_is_complete() { return 0; }
+                    ask() { :; }
+                    report_arch_packages() { :; }
+                    prepare_patch_check_source() { PATCH_CHECK_SRC=/unused; }
+                    apply_patches() { :; }
+                    restore_originals() { :; }
+                    install_arch_runtime_if_needed() { :; }
+                    find_system_kicad() { echo /usr/bin; }
+                    verify_cli() { echo verify >> "$step_log"; }
+                    backup_originals() { echo backup >> "$step_log"; }
+                    install_from_cache() { echo install >> "$step_log"; }
+                    verify_installation() {
+                        echo verify-install >> "$step_log"
+                        if "$failure"; then return 1; fi
+                    }
+                    offer_kicad_update_block() { echo offer >> "$step_log"; }
+                    main --version 10.0.8 "$mode"
+                ''', tmp, log, mode, str(failure).lower(), input='y\n')
+                self.assertEqual(result.returncode, 1 if failure else 0, result.stdout + result.stderr)
+                self.assertEqual(log.read_text().splitlines() if log.exists() else [], expected)
+
 
 
 if __name__ == '__main__':
