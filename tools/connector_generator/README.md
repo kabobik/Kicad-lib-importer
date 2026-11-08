@@ -91,3 +91,6 @@ PCB Editor -> Tools -> External Plugins -> Generate Connector Symbols
 4. Нажать `Сгенерировать`.
 
 Перед `--write` обязательно смотреть `git diff` в библиотечном репозитории.
+
+Разбор строк и границ S-expression использует общий `tools/kicad_sexpr.py`;
+владелец генерации и сохранения символов остаётся `connector_generator.py`.

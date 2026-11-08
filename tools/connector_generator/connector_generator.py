@@ -6,11 +6,14 @@ from __future__ import annotations
 import argparse
 import difflib
 import os
-import re
 import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+# Shared span reader also serves PCB/schematic connectivity recovery.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tools.kicad_sexpr import matching_paren, read_quoted, skip_string  # noqa: E402
 
 
 DEFAULT_SCHEME_MAP = {
@@ -77,35 +80,8 @@ def fmt_num(value: float) -> str:
     return f"{value:g}"
 
 
-def skip_string(text: str, i: int) -> int:
-    i += 1
-    while i < len(text):
-        if text[i] == "\\":
-            i += 2
-            continue
-        if text[i] == '"':
-            return i + 1
-        i += 1
-    return i
 
 
-def read_quoted(text: str, i: int) -> tuple[str, int]:
-    assert text[i] == '"'
-    i += 1
-    out: list[str] = []
-
-    while i < len(text):
-        ch = text[i]
-        if ch == "\\" and i + 1 < len(text):
-            out.append(text[i + 1])
-            i += 2
-            continue
-        if ch == '"':
-            return "".join(out), i + 1
-        out.append(ch)
-        i += 1
-
-    raise ValueError("unterminated quoted string")
 
 
 def is_list_at(text: str, i: int, head: str) -> bool:
@@ -125,24 +101,6 @@ def symbol_name_at(text: str, i: int) -> str:
     return name
 
 
-def matching_paren(text: str, start: int) -> int:
-    depth = 0
-    i = start
-
-    while i < len(text):
-        ch = text[i]
-        if ch == '"':
-            i = skip_string(text, i)
-            continue
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-            if depth == 0:
-                return i + 1
-        i += 1
-
-    raise ValueError(f"unclosed list at offset {start}")
 
 
 def find_symbol_blocks(text: str, target_depth: int) -> list[SymbolBlock]:

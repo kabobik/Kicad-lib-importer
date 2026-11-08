@@ -24,6 +24,11 @@ tools/connector_generator/connector_generator.py
 Скрипт создает symlink в пользовательскую папку плагинов KiCad. После установки
 перезапустите KiCad.
 
+Установка ссылок выполняется общим `scripts/lib/kicad_plugin_installer.sh`.
+Версия определяется через `kicad-cli version`, каталог учитывает `XDG_DATA_HOME`.
+Для явного выбора каталога доступен `KICAD_PLUGIN_DIR`. Если `kicad-cli` отсутствует,
+укажите этот каталог вручную; чужая установка не заменяется.
+
 ## Возможности
 
 - выбрать `connectors.toml`;
